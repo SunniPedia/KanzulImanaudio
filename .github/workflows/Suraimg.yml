@@ -1,4 +1,4 @@
-name: Generate Ayah Images - Final
+name: Generate Ayah Images - Clean Numbers
 
 on:
   push:
@@ -17,7 +17,7 @@ jobs:
           python-version: '3.10'
       - run: pip install Pillow
 
-      - name: Generate - Big Font + Bottom Details
+      - name: Generate - Clean (1) Numbers
         run: |
           python3 << 'PY'
           from PIL import Image, ImageDraw, ImageFont
@@ -33,7 +33,14 @@ jobs:
               m=re.search(r'\d+',s)
               return int(m.group()) if m else 0
 
-          # Max Res + Glitch Fix
+          # --- NEW: Remove (1) or (১) from name ---
+          def clean_name(text):
+              # (1), (১), (১২), ( ১ ), ( 1 ) - all remove
+              text = re.sub(r'\s*\(\s*[0-9০-৯]+\s*\)', '', text)
+              # Also remove extra spaces created
+              text = re.sub(r'\s{2,}', ' ', text).strip()
+              return text
+
           W,H=3840,2160
           bg_img=None
           try:
@@ -41,49 +48,66 @@ jobs:
                   with Image.open(BG) as im: im.verify()
                   bg_img=Image.open(BG).convert("RGB")
                   W,H=bg_img.size
-                  print(f"Background: {W}x{H}")
           except:
               bg_img=Image.new("RGB",(W,H),(232,236,244))
 
-          LEFT_W=int(W*0.18); SCALE=W/1280
+          LEFT_W=int(W*0.18); SCALE=W/1280; MARGIN=int(60*SCALE)
 
-          def get_font(is_ar, base):
-              size=int(base*SCALE)
+          def get_font_by_size(is_ar, px_size):
               custom=FONT_AR if is_ar else FONT_BN
               if os.path.exists(custom):
-                  try: return ImageFont.truetype(custom, size)
+                  try: return ImageFont.truetype(custom, int(px_size))
                   except: pass
               return ImageFont.load_default()
+          def get_font(is_ar, base_dp):
+              return get_font_by_size(is_ar, base_dp * SCALE)
 
-          def load_details():
-              d={}
-              if os.path.exists(DETAILS):
-                  with open(DETAILS,encoding="utf-8") as f:
-                      for line in f:
-                          if not line.strip(): continue
-                          p=line.strip().split("|")
-                          if len(p)>=3: d[p[0].strip().zfill(3)]={"ar":p[1].strip(),"bn":p[2].strip()}
-              return d
+          def load_details_new():
+              details={}
+              if not os.path.exists(DETAILS): return None
+              with open(DETAILS, encoding="utf-8") as f:
+                  lines=[l.strip() for l in f if l.strip()]
+              if any("|" in l for l in lines):
+                  for l in lines:
+                      p=l.split("|")
+                      if len(p)>=3:
+                          details[p[0].strip().zfill(3)]={"ar":p[1].strip(),"bn":p[2].strip()}
+                  return details
+              else:
+                  if len(lines)>=2:
+                      ar_text=lines[0]; bn_text=lines[1]
+                      if len(lines)>2:
+                          for i in range(0,len(lines),2):
+                              idx=str((i//2)+1).zfill(3)
+                              a=lines[i] if i<len(lines) else ""
+                              b=lines[i+1] if i+1<len(lines) else ""
+                              details[idx]={"ar":a,"bn":b}
+                          details["default"]={"ar":ar_text,"bn":bn_text}
+                          return details
+                      else:
+                          return {"default":{"ar":ar_text,"bn":bn_text}}
+              return None
 
           os.makedirs(OUT,exist_ok=True)
-          details_map=load_details()
+          details_data=load_details_new()
+
           with open(DATA,encoding="utf-8") as f: data=json.load(f)
 
           for item in data:
               sura_int=extract_number(item.get('sura','0'))
               ayat_int=extract_number(item.get('verses','0'))
               s_no_int=extract_number(item.get('sura_no_en',sura_int))
+              filename=f"{sura_int:03d}{ayat_int:03d}.jpg"
 
-              # Filename: 001001.jpg (3+3)
-              filename = f"{sura_int:03d}{ayat_int:03d}.jpg"
+              def format_display(n): return f"0{n}" if n<10 else str(n)
+              sura_disp=to_bangla_num(format_display(sura_int))
+              ayat_disp=to_bangla_num(format_display(ayat_int))
 
-              # Display: 01, 22 logic (single digit gets 0)
-              # sura 1 -> 01, sura 22 -> 22, sura 114 -> 114
-              def format_display(n):
-                  if n < 10: return f"0{n}"
-                  else: return str(n)
-              sura_disp = to_bangla_num(format_display(sura_int))
-              ayat_disp = to_bangla_num(format_display(ayat_int))
+              # Clean the translation - remove (১) / (1)
+              raw_name = item.get('name','')
+              cleaned_name = clean_name(raw_name)
+              if raw_name!= cleaned_name:
+                  print(f"Cleaned: '{raw_name}' -> '{cleaned_name}'")
 
               bg=bg_img.copy() if bg_img.size==(W,H) else bg_img.resize((W,H), Image.LANCZOS)
               draw=ImageDraw.Draw(bg)
@@ -92,72 +116,78 @@ jobs:
 
               if os.path.exists(LOGO):
                   try:
-                      ls=int(220*SCALE) # logo bigger
+                      ls=int(220*SCALE)
                       logo=Image.open(LOGO).convert("RGBA").resize((ls,ls),Image.LANCZOS)
                       bg.paste(logo,(int((LEFT_W-ls)//2),int(30*SCALE)),logo)
                   except: pass
 
-              # --- BIGGER BEAUTIFUL FONTS ---
-              f_bn_s=get_font(False, 52) # Sura/Ayat - was 32
-              f_bn_m=get_font(False, 46) # Kanzul Iman - was 28
-              f_bn_l=get_font(False, 58) # Translation - was 34 - BIG
-              f_ar_l=get_font(True, 85) # Arabic - was 52 - VERY BIG
+              BASE_SURA=14; BASE_KANZUL=46; BASE_BN=58; BASE_AR=85
+              f_bn_s=get_font(False, BASE_SURA)
+              f_bn_m=get_font(False, BASE_KANZUL)
+              f_bn_l=get_font(False, BASE_BN)
+              f_ar_l=get_font(True, BASE_AR)
 
-              # Sura / Ayat - with leading zero
+              max_w=W-LEFT_W-int(100*SCALE)
+              avail_h=H-int(200*SCALE)
+
+              # Auto fit
+              for attempt in range(10):
+                  arabic_lines=item.get('names','').split("\n")
+                  trans_text=cleaned_name
+                  needed_h=len(arabic_lines)*int((BASE_AR*SCALE)*1.3)+100*SCALE
+                  temp_lines=[]
+                  for para in trans_text.split("\n"):
+                      cur=""
+                      for w in para.split():
+                          test=f"{cur} {w}".strip()
+                          if draw.textlength(test,font=f_bn_l)<=max_w: cur=test
+                          else:
+                              if cur: temp_lines.append(cur)
+                              cur=w
+                      if cur: temp_lines.append(cur)
+                  needed_h+=len(temp_lines)*int((BASE_BN*SCALE)*1.4)
+                  if needed_h<avail_h or attempt==9: break
+                  BASE_BN=int(BASE_BN*0.9); BASE_AR=int(BASE_AR*0.9)
+                  f_bn_l=get_font_by_size(False, BASE_BN*SCALE)
+                  f_ar_l=get_font_by_size(True, BASE_AR*SCALE)
+
               draw.text((int(40*SCALE),int(320*SCALE)),f"সূরা: {sura_disp}",font=f_bn_s,fill=(0,0,0))
-              draw.text((int(40*SCALE),int(390*SCALE)),f"আয়াত: {ayat_disp}",font=f_bn_s,fill=(0,0,0))
-              draw.line([(int(40*SCALE),int(470*SCALE)),(int(LEFT_W-40*SCALE),int(470*SCALE))],fill=(100,100,120),width=int(2*SCALE))
+              draw.text((int(40*SCALE),int(360*SCALE)),f"আয়াত: {ayat_disp}",font=f_bn_s,fill=(0,0,0))
+              draw.line([(int(40*SCALE),int(410*SCALE)),(int(LEFT_W-40*SCALE),int(410*SCALE))],fill=(100,100,120),width=int(2*SCALE))
 
-              # --- FIX: details.txt in empty space below logo (180deg style) ---
-              info=details_map.get(f"{s_no_int:03d}",{})
+              info=None
+              if details_data:
+                  if f"{s_no_int:03d}" in details_data: info=details_data[f"{s_no_int:03d}"]
+                  elif "default" in details_data: info=details_data["default"]
+                  elif details_data: info=list(details_data.values())[0]
+
               if info:
-                  # Put in bottom empty area, centered, 90deg rotated (which looks like 180deg from bottom view)
-                  txt=f"{info.get('bn','')} {info.get('ar','')}"
-                  # Create long vertical canvas
-                  tmp_h=int(900*SCALE); tmp_w=int(80*SCALE)
-                  tmp=Image.new("RGBA",(tmp_h, tmp_w),(0,0,0,0))
-                  ImageDraw.Draw(tmp).text((0,0),txt,font=f_bn_s,fill=(40,40,40))
-                  # Rotate 90 deg to be vertical, starting from middle-bottom
+                  ar_name=info.get('ar',''); bn_name=info.get('bn','')
+                  f_details=get_font(False, 14)
+                  combined_text=f"{bn_name} {ar_name}"
+                  txt_w=int(draw.textlength(combined_text, font=f_details)+100*SCALE)
+                  tmp=Image.new("RGBA",(txt_w, int(80*SCALE)),(0,0,0,0))
+                  ImageDraw.Draw(tmp).text((0,10),combined_text,font=f_details,fill=(30,30,60,255))
                   rotated=tmp.rotate(90,expand=True)
-                  # Position: logo er niche faka jayga - majhamajhi theke niche
-                  rx = int(35*SCALE)
-                  ry = int(520*SCALE) # Sura/Ayat er niche theke shuru
+                  rx=int((LEFT_W - rotated.width)//2)
+                  ry=int(460*SCALE)
+                  if ry + rotated.height > H - int(20*SCALE):
+                      ry = H - rotated.height - int(20*SCALE)
                   bg.paste(rotated,(rx,ry),rotated)
 
-              # Arabic + Translation centered vertically
-              arabic_lines=item.get('names','').split("\n")
-              trans_text=item.get('name','')
-
-              # Estimate block height for centering
-              block_h = len(arabic_lines)*int(110*SCALE) + int(40*SCALE) + int(70*SCALE) + 300
-              start_y = (H - block_h)//2
-              if start_y < int(80*SCALE): start_y = int(80*SCALE)
-
-              y=start_y
+              y=int(100*SCALE)
               for line in arabic_lines:
                   w=draw.textlength(line,font=f_ar_l)
                   draw.text((W-int(60*SCALE)-w,y),line,font=f_ar_l,fill=(0,0,0))
-                  y+=int(110*SCALE)
+                  y+=int((BASE_AR*SCALE)*1.3)
 
-              y+=int(40*SCALE)
+              y+=int(30*SCALE)
               draw.text((LEFT_W+int(50*SCALE),y),"কানযুল ঈমান থেকে অনুবাদ:",font=f_bn_m,fill=(20,40,120))
-              y+=int(75*SCALE)
+              y+=int(70*SCALE)
 
-              # Justify translation with bigger font
-              max_w=W-LEFT_W-int(100*SCALE)
-              lines=[]
-              for para in trans_text.split("\n"):
-                  cur=""
-                  for w in para.split():
-                      test=f"{cur} {w}".strip()
-                      if draw.textlength(test,font=f_bn_l)<=max_w: cur=test
-                      else:
-                          if cur: lines.append(cur)
-                          cur=w
-                  if cur: lines.append(cur)
-
-              for i,line in enumerate(lines):
-                  is_last=i==len(lines)-1
+              for i,line in enumerate(temp_lines):
+                  if y > H - MARGIN: break
+                  is_last=i==len(temp_lines)-1
                   if not is_last and len(line.split())>1:
                       extra=max_w-draw.textlength(line,font=f_bn_l)
                       se=extra/(len(line.split())-1)
@@ -167,10 +197,10 @@ jobs:
                           tx+=draw.textlength(w,font=f_bn_l)+draw.textlength(" ",font=f_bn_l)+se
                   else:
                       draw.text((LEFT_W+int(50*SCALE),y),line,font=f_bn_l,fill=(15,25,85))
-                  y+=int(80*SCALE)
+                  y+=int((BASE_BN*SCALE)*1.4)
 
               bg.save(os.path.join(OUT,filename),"JPEG",quality=100,dpi=(300,300),subsampling=0)
-              print(f"Generated {filename} -> Sura:{sura_disp} Ayat:{ayat_disp}")
+              print(f"Generated {filename}")
           PY
 
       - name: Push
@@ -178,5 +208,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add output/
-          git diff --staged --quiet || git commit -m "final: big fonts, bottom details, 01 format"
+          git diff --staged --quiet || git commit -m "fix: remove (1) (১) from name + keep all details"
           git push
