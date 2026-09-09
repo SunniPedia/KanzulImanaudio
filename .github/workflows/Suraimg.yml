@@ -10,11 +10,9 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-
       - run: pip install Pillow
 
       - name: Generate Fixed Images
@@ -37,16 +35,13 @@ jobs:
               s=str(s).translate(str.maketrans("০১২৩৪৫৬৭৮৯","0123456789"))
               m=re.search(r'\d+',s)
               return int(m.group()) if m else 0
-
           def clean_name(text):
-              # Remove (1) (১) (১২)
               text = re.sub(r'\s*\(\s*[0-9০-৯]+\s*\)', '', text)
               return re.sub(r'\s{2,}', ' ', text).strip()
 
           W,H=3840,2160
           try:
               if os.path.exists(BG):
-                  with Image.open(BG) as im: im.verify()
                   bg_img=Image.open(BG).convert("RGB")
                   W,H=bg_img.size
               else:
@@ -54,7 +49,7 @@ jobs:
           except:
               bg_img=Image.new("RGB",(W,H),(232,236,244))
 
-          LEFT_W=int(W*0.18)
+          LEFT_W=int(W*0.22)
           SCALE=W/1280
 
           def get_font_by_size(is_ar, px_size):
@@ -63,21 +58,17 @@ jobs:
                   try: return ImageFont.truetype(p, int(px_size))
                   except: pass
               return ImageFont.load_default()
-
           def get_font(is_ar, dp):
               return get_font_by_size(is_ar, dp*SCALE)
 
-          # Load details - new format
+          # details.txt load - 2 line = 1 sura
           details_map={}
           if os.path.exists(DETAILS):
               with open(DETAILS, encoding="utf-8") as f:
                   lines=[l.strip() for l in f if l.strip()]
-              # 2 lines = ar + bn
-              if len(lines)>=2:
-                  for i in range(0,len(lines),2):
-                      k=str((i//2)+1).zfill(3)
-                      details_map[k]={"ar":lines[i],"bn":lines[i+1] if i+1<len(lines) else ""}
-              print(f"Details loaded: {details_map}")
+              for i in range(0,len(lines),2):
+                  k=str((i//2)+1).zfill(3)
+                  details_map[k]={"ar":lines[i],"bn":lines[i+1] if i+1<len(lines) else ""}
 
           os.makedirs(OUT, exist_ok=True)
           with open(DATA, encoding="utf-8") as f:
@@ -100,28 +91,23 @@ jobs:
 
               if os.path.exists(LOGO):
                   try:
-                      ls=int(220*SCALE)
+                      ls=int(200*SCALE)
                       logo=Image.open(LOGO).convert("RGBA").resize((ls,ls), Image.LANCZOS)
                       bg.paste(logo,(int((LEFT_W-ls)//2), int(30*SCALE)), logo)
                   except: pass
 
-              # FONTS - you asked 14dp but it was too small, now set 26dp readable
-              # If you want exact 14dp, change BASE_SURA to 14
-              BASE_SURA=26
-              BASE_DETAILS_AR=30
-              BASE_DETAILS_BN=28
-              BASE_KANZUL=46
-              BASE_BN=58
-              BASE_AR=82
+              BASE_SURA=22
+              BASE_KANZUL=38
+              BASE_BN=48
+              BASE_AR=60
 
               f_sura=get_font(False, BASE_SURA)
               f_kanzul=get_font(False, BASE_KANZUL)
               f_bn=get_font(False, BASE_BN)
               f_ar=get_font(True, BASE_AR)
+              max_w=W-LEFT_W-int(140*SCALE)
 
-              max_w=W-LEFT_W-int(120*SCALE)
-
-              # ARABIC WRAP
+              # Arabic wrap
               arabic_raw=item.get('names','').strip()
               arabic_lines=[]
               cur=""
@@ -134,7 +120,7 @@ jobs:
                       cur=w
               if cur: arabic_lines.append(cur)
 
-              # BENGALI CLEAN + WRAP
+              # Bangla wrap
               cleaned=clean_name(item.get('name',''))
               bn_lines=[]
               cur=""
@@ -147,77 +133,77 @@ jobs:
                       cur=w
               if cur: bn_lines.append(cur)
 
-              # Auto shrink if overflow
-              y_test=int(80*SCALE)+len(arabic_lines)*int(BASE_AR*SCALE*1.35)+int(100*SCALE)+len(bn_lines)*int(BASE_BN*SCALE*1.4)
-              while y_test > H-int(50*SCALE) and BASE_BN>30:
-                  BASE_BN-=4; BASE_AR-=4
-                  f_bn=get_font_by_size(False, BASE_BN*SCALE)
-                  f_ar=get_font_by_size(True, BASE_AR*SCALE)
-                  y_test=int(80*SCALE)+len(arabic_lines)*int(BASE_AR*SCALE*1.35)+int(100*SCALE)+len(bn_lines)*int(BASE_BN*SCALE*1.4)
-
-              # Draw Sura/Ayat
+              # Left panel Sura/Ayat
               draw.text((int(40*SCALE), int(320*SCALE)), f"সূরা: {sura_disp}", font=f_sura, fill=(0,0,0))
               draw.text((int(40*SCALE), int(370*SCALE)), f"আয়াত: {ayat_disp}", font=f_sura, fill=(0,0,0))
               draw.line([(int(40*SCALE), int(430*SCALE)), (int(LEFT_W-40*SCALE), int(430*SCALE))], fill=(100,100,120), width=2)
 
-              # DETAILS - Separate lines, Arabic font + Bengali font
+              # ===== FIX: DETAILS ALWAYS VISIBLE =====
               info=details_map.get(f"{s_no:03d}", details_map.get("001"))
               if info:
                   ar_txt=info.get('ar','')
                   bn_txt=info.get('bn','')
+                  # ফন্ট সাইজ অটো ছোট হবে যাতে সব ছবিতেই আঁটে
+                  det_ar_size = 22 * SCALE
+                  det_bn_size = 22 * SCALE
+                  while True:
+                      f_ar_det=get_font_by_size(True, det_ar_size)
+                      f_bn_det=get_font_by_size(False, det_bn_size)
+                      ar_w=int(draw.textlength(ar_txt, font=f_ar_det)+80*SCALE)
+                      bn_w=int(draw.textlength(bn_txt, font=f_bn_det)+80*SCALE)
+                      tmp_ar=Image.new("RGBA",(ar_w, int(80*SCALE)), (0,0,0,0))
+                      ImageDraw.Draw(tmp_ar).text((0,10), ar_txt, font=f_ar_det, fill=(20,20,60,255))
+                      rot_ar=tmp_ar.rotate(90, expand=True)
+                      tmp_bn=Image.new("RGBA",(bn_w, int(80*SCALE)), (0,0,0,0))
+                      ImageDraw.Draw(tmp_bn).text((0,10), bn_txt, font=f_bn_det, fill=(20,20,60,255))
+                      rot_bn=tmp_bn.rotate(90, expand=True)
 
-                  f_ar_det=get_font_by_size(True, BASE_DETAILS_AR*SCALE)
-                  f_bn_det=get_font_by_size(False, BASE_DETAILS_BN*SCALE)
+                      total_h = rot_ar.height + rot_bn.height + int(60*SCALE)
+                      if total_h < (H - int(480*SCALE)) or det_ar_size < 12*SCALE:
+                          break
+                      det_ar_size -= 1*SCALE
+                      det_bn_size -= 1*SCALE
 
-                  # Arabic block
-                  ar_w=int(draw.textlength(ar_txt, font=f_ar_det)+100*SCALE)
-                  tmp_ar=Image.new("RGBA",(ar_w, int(90*SCALE)), (0,0,0,0))
-                  ImageDraw.Draw(tmp_ar).text((0,15), ar_txt, font=f_ar_det, fill=(20,20,60,255))
-                  rot_ar=tmp_ar.rotate(90, expand=True)
-
-                  # Bengali block - separate line below
-                  bn_w=int(draw.textlength(bn_txt, font=f_bn_det)+100*SCALE)
-                  tmp_bn=Image.new("RGBA",(bn_w, int(90*SCALE)), (0,0,0,0))
-                  ImageDraw.Draw(tmp_bn).text((0,15), bn_txt, font=f_bn_det, fill=(20,20,60,255))
-                  rot_bn=tmp_bn.rotate(90, expand=True)
-
-                  rx_ar=int((LEFT_W-rot_ar.width)//2)
                   ry=int(480*SCALE)
+                  rx_ar=int((LEFT_W-rot_ar.width)//2)
                   bg.paste(rot_ar, (rx_ar, ry), rot_ar)
-                  ry+=rot_ar.height+int(25*SCALE)
-
+                  ry+=rot_ar.height+int(20*SCALE)
                   rx_bn=int((LEFT_W-rot_bn.width)//2)
-                  if ry+rot_bn.height < H-int(20*SCALE):
-                      bg.paste(rot_bn, (rx_bn, ry), rot_bn)
+                  bg.paste(rot_bn, (rx_bn, ry), rot_bn)
 
-              # Draw main
-              y=int(80*SCALE)
+              # Main content
+              y=int(350*SCALE)
               for line in arabic_lines:
                   w=draw.textlength(line, font=f_ar)
-                  draw.text((W-int(60*SCALE)-w, y), line, font=f_ar, fill=(0,0,0))
-                  y+=int(BASE_AR*SCALE*1.35)
+                  draw.text((W-int(70*SCALE)-w, y), line, font=f_ar, fill=(0,0,0))
+                  y+=int(BASE_AR*SCALE*1.45)
 
-              y+=int(30*SCALE)
+              y+=int(40*SCALE)
               draw.text((LEFT_W+int(50*SCALE), y), "কানযুল ঈমান থেকে অনুবাদ:", font=f_kanzul, fill=(20,40,120))
-              y+=int(75*SCALE)
+              y+=int(70*SCALE)
 
+              # Bangla with Justify - ফাঁকা কন্ট্রোল সহ
               for i,line in enumerate(bn_lines):
                   if y>H-int(60*SCALE): break
+                  words=line.split()
                   is_last=i==len(bn_lines)-1
-                  if not is_last and len(line.split())>1:
-                      extra=max_w-draw.textlength(line, font=f_bn)
-                      se=extra/(len(line.split())-1)
-                      tx=LEFT_W+int(50*SCALE)
-                      for w in line.split():
-                          draw.text((tx,y), w, font=f_bn, fill=(15,25,85))
-                          tx+=draw.textlength(w, font=f_bn)+draw.textlength(" ", font=f_bn)+se
+                  if not is_last and len(words)>1:
+                      base_w=sum(draw.textlength(w, font=f_bn) for w in words) + draw.textlength(" ", font=f_bn)*(len(words)-1)
+                      extra=max_w-base_w
+                      gap=extra/(len(words)-1) if len(words)>1 else 0
+                      if gap>0 and gap < 65*SCALE:
+                          tx=LEFT_W+int(50*SCALE)
+                          for w in words:
+                              draw.text((tx,y), w, font=f_bn, fill=(15,25,85))
+                              tx+=draw.textlength(w, font=f_bn)+draw.textlength(" ", font=f_bn)+gap
+                      else:
+                          draw.text((LEFT_W+int(50*SCALE), y), line, font=f_bn, fill=(15,25,85))
                   else:
                       draw.text((LEFT_W+int(50*SCALE), y), line, font=f_bn, fill=(15,25,85))
                   y+=int(BASE_BN*SCALE*1.4)
 
-              bg.save(os.path.join(OUT, filename), "JPEG", quality=100, dpi=(300,300), subsampling=0)
+              bg.save(os.path.join(OUT, filename), "JPEG", quality=95, dpi=(300,300), subsampling=0)
               print(f"Done {filename}")
-
           PY
 
       - name: Push output
@@ -225,5 +211,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add output/
-          git diff --staged --quiet || git commit -m "manual generate fixed"
+          git diff --staged --quiet || git commit -m "fix: details always visible + justify kept"
           git push
