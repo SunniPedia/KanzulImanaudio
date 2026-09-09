@@ -19,7 +19,7 @@ jobs:
       - name: Merge Audios into kanzulImanAudio
         run: |
           ARABIC_DIR="Audio/alafasy/128"
-          BANGLA_DIR="audio/bangla"
+          BANGLA_DIR="Audio/bangla"
           OUTPUT_DIR="kanzulImanAudio"
 
           mkdir -p "$OUTPUT_DIR"
