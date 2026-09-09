@@ -86,15 +86,36 @@ jobs:
           BASE_BN=52                # বাংলা অনুবাদ - auto shrink হবে
           BASE_AR=80                # আরবি আয়াত - auto shrink হবে
 
-          f_ar_det=get_font_by_size(True, BASE_DETAILS_AR*SCALE)
-          f_bn_det=get_font_by_size(False, BASE_DETAILS_BN*SCALE)
+          # সূরা/আয়াত-এর পজিশন (সব ছবিতে একই, একবারই হিসাব করা হচ্ছে)
+          SURA_Y=int(300*SCALE)
+          AYAT_Y=SURA_Y + int(BASE_SURA*SCALE*1.6)
+          LINE_Y=AYAT_Y + int(BASE_SURA*SCALE*1.6)
 
-          # === ৯০° লেখার জন্য ফিক্সড "স্লট" সাইজ - AR_NAME/BN_NAME একবারই ইনপুট থেকে আসে,
-          #     তাই সব ছবিতে বক্সের সাইজ/পজিশন সমান থাকবে
+          # নাম দুটোর (আরবি+বাংলা) জন্য নিচে যতটুকু জায়গা আসলে খালি আছে (সূরা/আয়াত লাইনের পর থেকে
+          # ছবির শেষ পর্যন্ত), তার মধ্যেই যেন ফিট করে - না হলে কেটে যায়। তাই না ফিট হলে ফন্ট
+          # auto-shrink হয়ে ছোট হবে, কখনো ছবির বাইরে যাবে না।
+          TOP_GAP=int(50*SCALE)
+          BOTTOM_MARGIN=int(40*SCALE)
+          AVAIL_H = H - LINE_Y - TOP_GAP - BOTTOM_MARGIN
+          DETAILS_FLOOR=26   # ফন্ট এর চেয়ে ছোট হবে না
+
           _dummy_draw=ImageDraw.Draw(Image.new("RGB",(10,10)))
-          AR_SLOT_H=int(_dummy_draw.textlength(AR_NAME, font=f_ar_det) + 60*SCALE)
-          BN_SLOT_H=int(_dummy_draw.textlength(BN_NAME, font=f_bn_det) + 60*SCALE)
-          print(f"AR_SLOT_H={AR_SLOT_H}, BN_SLOT_H={BN_SLOT_H}")
+          temp_DET=52
+          while True:
+              f_ar_det=get_font_by_size(True, temp_DET*SCALE)
+              f_bn_det=get_font_by_size(False, temp_DET*SCALE)
+              ar_w=_dummy_draw.textlength(AR_NAME, font=f_ar_det)
+              bn_w=_dummy_draw.textlength(BN_NAME, font=f_bn_det)
+              AR_SLOT_H=int(ar_w + 60*SCALE)
+              BN_SLOT_H=int(bn_w + 60*SCALE)
+              needed=max(AR_SLOT_H, BN_SLOT_H)
+              if needed <= AVAIL_H or temp_DET <= DETAILS_FLOOR:
+                  BASE_DETAILS_AR=temp_DET
+                  BASE_DETAILS_BN=temp_DET
+                  break
+              temp_DET -= 2
+
+          print(f"AVAIL_H={AVAIL_H}, final details font={BASE_DETAILS_AR}dp, AR_SLOT_H={AR_SLOT_H}, BN_SLOT_H={BN_SLOT_H}")
 
           det_ar_h=int(BASE_DETAILS_AR*SCALE*2.2)
           det_bn_h=int(BASE_DETAILS_BN*SCALE*2.2)
@@ -111,6 +132,16 @@ jobs:
           _bn_tx=max(0, int((BN_SLOT_H-_bn_tw)//2))
           ImageDraw.Draw(tmp_bn).text((_bn_tx,int(det_bn_h*0.15)), BN_NAME, font=f_bn_det, fill=(20,20,60,255))
           ROT_BN=tmp_bn.rotate(90, expand=True)   # নিচে: ৯০° বাংলা সূরার নাম
+
+          # SolaimanLipi ফন্টে ":" (কোলন) বাংলা অক্ষরের baseline থেকে একটু নিচে বসে -
+          # তাই কোলনটা আলাদাভাবে একটু উপরে তুলে আঁকা হচ্ছে যাতে align দেখতে ভালো লাগে
+          def draw_label_colon(draw, x, y, label, value, font, fill):
+              draw.text((x, y), label, font=font, fill=fill)
+              label_w = draw.textlength(label, font=font)
+              colon_up = int(font.size * 0.12)   # কোলনটা কতটা উপরে তোলা হবে
+              draw.text((x+label_w, y-colon_up), ":", font=font, fill=fill)
+              colon_w = draw.textlength(":", font=font)
+              draw.text((x+label_w+colon_w, y), " "+value, font=font, fill=fill)
 
           for item in data:
               sura_int=extract_number(item.get('sura','0'))
@@ -192,21 +223,17 @@ jobs:
               min_top = int(120*SCALE)
               start_y = max(min_top, (H - total_block_h) // 2)
 
-              # Sura / Ayat
-              sura_y = int(300*SCALE)
-              ayat_y = sura_y + int(BASE_SURA*SCALE*1.6)
-              line_y = ayat_y + int(BASE_SURA*SCALE*1.6)
-
-              draw.text((int(40*SCALE), sura_y), f"সূরা: {sura_disp}", font=f_sura, fill=(0,0,0))
-              draw.text((int(40*SCALE), ayat_y), f"আয়াত: {ayat_disp}", font=f_sura, fill=(0,0,0))
-              draw.line([(int(40*SCALE), line_y), (int(LEFT_W-40*SCALE), line_y)], fill=(100,100,120), width=2)
+              # Sura / Ayat (আগে থেকে হিসাব করা ফিক্সড পজিশন) - কোলন align করে আঁকা হচ্ছে
+              draw_label_colon(draw, int(40*SCALE), SURA_Y, "সূরা", sura_disp, f_sura, (0,0,0))
+              draw_label_colon(draw, int(40*SCALE), AYAT_Y, "আয়াত", ayat_disp, f_sura, (0,0,0))
+              draw.line([(int(40*SCALE), LINE_Y), (int(LEFT_W-40*SCALE), LINE_Y)], fill=(100,100,120), width=2)
 
               # DETAILS - বাম পাশে ৯০° আরবি সূরার নাম, তার পাশে ৯০° বাংলা সূরার নাম (side-by-side)
-              # (workflow_dispatch input থেকে আসা নাম, প্রতিটা ছবিতে একই বক্সে বসছে)
+              # (workflow_dispatch input থেকে আসা নাম, auto-shrink করা ফন্টে, প্রতিটা ছবিতে একই বক্সে বসছে)
               gap_x=int(30*SCALE)
               total_w=ROT_AR.width+gap_x+ROT_BN.width
               start_x=max(0, (LEFT_W-total_w)//2)
-              ry=line_y+int(50*SCALE)
+              ry=LINE_Y+TOP_GAP
               ax=start_x
               bg.paste(ROT_AR, (int(ax), ry), ROT_AR)
               bx=ax+ROT_AR.width+gap_x
