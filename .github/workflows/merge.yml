@@ -23,8 +23,6 @@ jobs:
           OUTPUT_DIR="kanzulImanAudio"
 
           mkdir -p "$OUTPUT_DIR"
-          ls -lh "$ARABIC_DIR"/ | head -n 20
-          ls -lh "$BANGLA_DIR"/ | head -n 20
 
           for arabic_file in "$ARABIC_DIR"/*.mp3; do
             [ -e "$arabic_file" ] || continue
@@ -34,19 +32,23 @@ jobs:
 
             if [ -f "$bangla_file" ]; then
               echo "MERGING $file_name"
-              ffmpeg -y -i "$arabic_file" -i "$bangla_file" -filter_complex "[0:a][1:a]concat=n=2:v=0:a=1[a]" -map "[a]" -b:a 128k "$output_file"
+              ffmpeg -y -hide_banner -loglevel error -i "$arabic_file" -i "$bangla_file" -filter_complex "[0:a][1:a]concat=n=2:v=0:a=1[a]" -map "[a]" -b:a 128k "$output_file"
             else
-              echo "Bangla missing for $file_name, only Arabic copied"
               cp "$arabic_file" "$output_file"
             fi
           done
-
           ls -lh "$OUTPUT_DIR"/
 
-      - name: Commit
+      - name: Upload Artifact (Download from here)
+        uses: actions/upload-artifact@v4
+        with:
+          name: kanzulImanAudio-Merged
+          path: kanzulImanAudio/
+
+      - name: Force Commit to Repo
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add kanzulImanAudio/
-          git diff --staged --quiet || git commit -m "Merged Audio + Bangla to kanzulImanAudio"
+          git add -f kanzulImanAudio/
+          git commit -m "Merged Arabic + Bangla Audio" || echo "No changes to commit"
           git push
