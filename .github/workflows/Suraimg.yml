@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       arabic_name:
-        description: 'আরবি সূরার নাম (৯০° রোটেটেড লেখা হবে, উপরে)'
+        description: 'আরবি সূরার নাম (উপরে থাকবে)'
         required: true
         type: string
       bangla_name:
-        description: 'বাংলা সূরার নাম (৯০° রোটেটেড লেখা হবে, নিচে)'
+        description: 'বাংলা সূরার নাম (নিচে থাকবে)'
         required: true
         type: string
 
@@ -40,12 +40,10 @@ jobs:
           FONT_BN="src/solaimanlipi.ttf"
           FONT_AR="src/noorehuda.ttf"
 
-          # ৯০° রোটেটেড টেক্সট এখন details.txt থেকে না, workflow_dispatch input থেকে আসছে
           AR_NAME=os.environ.get("ARABIC_NAME","").strip()
           BN_NAME=os.environ.get("BANGLA_NAME","").strip()
           print(f"ARABIC_NAME={AR_NAME!r}, BANGLA_NAME={BN_NAME!r}")
 
-          # পুরানো output ডিলিট - যাতে নতুন ছবি ১০০% বানায়
           if os.path.exists(OUT):
               shutil.rmtree(OUT)
           os.makedirs(OUT, exist_ok=True)
@@ -79,25 +77,22 @@ jobs:
               data=json.load(f)
 
           # === ফন্ট সাইজ (dp) ===
-          BASE_SURA=48              # সূরা/আয়াত
-          BASE_DETAILS_AR=52        # ইনপুট থেকে পাওয়া আরবি সূরার নাম
-          BASE_DETAILS_BN=52        # ইনপুট থেকে পাওয়া বাংলা সূরার নাম
+          BASE_SURA=48
+          BASE_DETAILS_AR=52
+          BASE_DETAILS_BN=52
           BASE_KANZUL=42
-          BASE_BN=52                # বাংলা অনুবাদ - auto shrink হবে
-          BASE_AR=80                # আরবি আয়াত - auto shrink হবে
+          BASE_BN=52
+          BASE_AR=80
 
-          # সূরা/আয়াত-এর পজিশন (সব ছবিতে একই, একবারই হিসাব করা হচ্ছে)
           SURA_Y=int(300*SCALE)
           AYAT_Y=SURA_Y + int(BASE_SURA*SCALE*1.6)
           LINE_Y=AYAT_Y + int(BASE_SURA*SCALE*1.6)
 
-          # নাম দুটো (আরবি+বাংলা) এখন ৯০° ঘোরানো হবে না - সাধারণ (0°) আনুভূমিক টেক্সট হিসেবে
-          # বাম কলামে পাশাপাশি বসবে। LEFT_W কলামের ভেতরে (মার্জিন বাদ দিয়ে) দুটো টেক্সট + মাঝের
-          # ছোট গ্যাপ যেন ফিট করে (ওভারল্যাপ না হয়) - না ফিট হলে ফন্ট auto-shrink হবে।
+          # === FIX: নাম দুটো এখন উপরে-নিচে (line break) ===
           SIDE_MARGIN=int(30*SCALE)
           AVAIL_W_NAMES = LEFT_W - 2*SIDE_MARGIN
-          GAP_X=int(15*SCALE)   # মাঝের স্পেস কমানো হলো
-          DETAILS_FLOOR=22      # ফন্ট এর চেয়ে ছোট হবে না
+          DETAILS_FLOOR=22
+          GAP_Y_DETAILS=int(18*SCALE)
 
           _dummy_draw=ImageDraw.Draw(Image.new("RGB",(10,10)))
           temp_DET=52
@@ -106,8 +101,8 @@ jobs:
               f_bn_det=get_font_by_size(False, temp_DET*SCALE)
               AR_NAME_W=_dummy_draw.textlength(AR_NAME, font=f_ar_det)
               BN_NAME_W=_dummy_draw.textlength(BN_NAME, font=f_bn_det)
-              needed=AR_NAME_W + GAP_X + BN_NAME_W
-              if needed <= AVAIL_W_NAMES or temp_DET <= DETAILS_FLOOR:
+              # এখন max width চেক, যোগফল না
+              if max(AR_NAME_W, BN_NAME_W) <= AVAIL_W_NAMES or temp_DET <= DETAILS_FLOOR:
                   BASE_DETAILS_AR=temp_DET
                   BASE_DETAILS_BN=temp_DET
                   break
@@ -115,19 +110,17 @@ jobs:
 
           print(f"AVAIL_W_NAMES={AVAIL_W_NAMES}, final details font={BASE_DETAILS_AR}dp, AR_NAME_W={AR_NAME_W}, BN_NAME_W={BN_NAME_W}")
 
-          NAMES_TOTAL_W = AR_NAME_W + GAP_X + BN_NAME_W
-          NAMES_START_X = max(SIDE_MARGIN, (LEFT_W - NAMES_TOTAL_W)//2)
+          NAMES_START_X = SIDE_MARGIN
           NAMES_Y = LINE_Y + int(50*SCALE)
 
-          # SolaimanLipi ফন্টে ":" (কোলন) বাংলা অক্ষরের baseline থেকে একটু নিচে বসে -
-          # তাই কোলনটা আলাদাভাবে একটু উপরে তুলে আঁকা হচ্ছে যাতে align দেখতে ভালো লাগে
           def draw_label_colon(draw, x, y, label, value, font, fill):
               draw.text((x, y), label, font=font, fill=fill)
               label_w = draw.textlength(label, font=font)
-              colon_up = int(font.size * 0.12)   # কোলনটা কতটা উপরে তোলা হবে
+              colon_up = int(font.size * 0.12)
               draw.text((x+label_w, y-colon_up), ":", font=font, fill=fill)
               colon_w = draw.textlength(":", font=font)
-              draw.text((x+label_w+colon_w, y), " "+value, font=font, fill=fill)
+              if value:
+                  draw.text((x+label_w+colon_w, y), " "+value, font=font, fill=fill)
 
           for item in data:
               sura_int=extract_number(item.get('sura','0'))
@@ -154,8 +147,6 @@ jobs:
               f_kanzul=get_font(False, BASE_KANZUL)
               max_w=W-LEFT_W-int(140*SCALE)
 
-              # Arabic ayah - auto shrink যাতে টেক্সট লম্বা হলে ব্লকটা ছবির বাইরে না যায়,
-              # কিন্তু ছোট আয়াতে বড় (80dp) ফন্টই বজায় থাকে
               temp_AR = BASE_AR
               while True:
                   f_ar=get_font(True, temp_AR)
@@ -176,7 +167,6 @@ jobs:
                       break
                   temp_AR -= 2
 
-              # Bangla - auto shrink যাতে না কাটে
               temp_BN = BASE_BN
               while True:
                   f_bn=get_font(False, temp_BN)
@@ -199,7 +189,6 @@ jobs:
 
               f_bn=get_font(False, BASE_BN)
 
-              # === Main content (Arabic ayah + heading + Bangla translation) ব্লকের total height ===
               arabic_block_h = len(arabic_lines) * int(BASE_AR*SCALE*1.5)
               gap_after_arabic = int(50*SCALE)
               kanzul_block_h = int(75*SCALE)
@@ -209,16 +198,18 @@ jobs:
               min_top = int(120*SCALE)
               start_y = max(min_top, (H - total_block_h) // 2)
 
-              # Sura / Ayat (আগে থেকে হিসাব করা ফিক্সড পজিশন) - কোলন align করে আঁকা হচ্ছে
+              # Sura / Ayat - কোলন align
               draw_label_colon(draw, int(40*SCALE), SURA_Y, "সূরা", sura_disp, f_sura, (0,0,0))
               draw_label_colon(draw, int(40*SCALE), AYAT_Y, "আয়াত", ayat_disp, f_sura, (0,0,0))
               draw.line([(int(40*SCALE), LINE_Y), (int(LEFT_W-40*SCALE), LINE_Y)], fill=(100,100,120), width=2)
 
-              # DETAILS - বাম পাশে আরবি সূরার নাম, তার পাশে বাংলা সূরার নাম (0°, side-by-side, ওভারল্যাপ-মুক্ত)
-              # (workflow_dispatch input থেকে আসা নাম, auto-shrink করা ফন্টে, প্রতিটা ছবিতে একই পজিশনে বসছে)
-              draw.text((NAMES_START_X, NAMES_Y), AR_NAME, font=f_ar_det, fill=(20,20,60))
-              bx=NAMES_START_X+AR_NAME_W+GAP_X
-              draw.text((bx, NAMES_Y), BN_NAME, font=f_bn_det, fill=(20,20,60))
+              # DETAILS - এখন উপরে আরবি, নিচে বাংলা (0°, line break)
+              f_ar_det=get_font_by_size(True, BASE_DETAILS_AR*SCALE)
+              f_bn_det=get_font_by_size(False, BASE_DETAILS_BN*SCALE)
+              dy = NAMES_Y
+              draw.text((NAMES_START_X, dy), AR_NAME, font=f_ar_det, fill=(20,20,60))
+              dy += int(BASE_DETAILS_AR*SCALE*1.5) + GAP_Y_DETAILS
+              draw.text((NAMES_START_X, dy), BN_NAME, font=f_bn_det, fill=(20,20,60))
 
               y=start_y
               for line in arabic_lines:
@@ -227,7 +218,8 @@ jobs:
                   y+=int(BASE_AR*SCALE*1.5)
 
               y+=int(50*SCALE)
-              draw.text((LEFT_W+int(50*SCALE), y), "কানযুল ঈমান থেকে অনুবাদ:", font=f_kanzul, fill=(20,40,120))
+              # === FIX: অনুবাদ: এর কোলনটা সূরা/আয়াতের মত হবে ===
+              draw_label_colon(draw, LEFT_W+int(50*SCALE), y, "কানযুল ঈমান থেকে অনুবাদ", "", f_kanzul, (20,40,120))
               y+=int(75*SCALE)
 
               for i,line in enumerate(bn_lines):
@@ -258,5 +250,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -f output/
-          git commit -m "sura name now from workflow_dispatch inputs instead of details.txt" || echo "no changes"
+          git commit -m "fix: onubad colon alignment + arabic/bangla sura name stacked vertically" || echo "no changes"
           git push
