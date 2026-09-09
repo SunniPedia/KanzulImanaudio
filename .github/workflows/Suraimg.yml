@@ -1,4 +1,4 @@
-name: Generate Ayah Images - 001001 Format
+name: Generate Ayah Images - Final
 
 on:
   push:
@@ -17,7 +17,7 @@ jobs:
           python-version: '3.10'
       - run: pip install Pillow
 
-      - name: Generate
+      - name: Generate - Big Font + Bottom Details
         run: |
           python3 << 'PY'
           from PIL import Image, ImageDraw, ImageFont
@@ -41,6 +41,7 @@ jobs:
                   with Image.open(BG) as im: im.verify()
                   bg_img=Image.open(BG).convert("RGB")
                   W,H=bg_img.size
+                  print(f"Background: {W}x{H}")
           except:
               bg_img=Image.new("RGB",(W,H),(232,236,244))
 
@@ -73,53 +74,79 @@ jobs:
               ayat_int=extract_number(item.get('verses','0'))
               s_no_int=extract_number(item.get('sura_no_en',sura_int))
 
-              # --- YOUR REQUIRED FILENAME FORMAT ---
-              # 1,1 -> 001001.jpg | 124,1 -> 124001.jpg | 2,270 -> 002270.jpg
+              # Filename: 001001.jpg (3+3)
               filename = f"{sura_int:03d}{ayat_int:03d}.jpg"
 
-              sura_bn=to_bangla_num(str(sura_int))
-              ayat_bn=to_bangla_num(str(ayat_int))
+              # Display: 01, 22 logic (single digit gets 0)
+              # sura 1 -> 01, sura 22 -> 22, sura 114 -> 114
+              def format_display(n):
+                  if n < 10: return f"0{n}"
+                  else: return str(n)
+              sura_disp = to_bangla_num(format_display(sura_int))
+              ayat_disp = to_bangla_num(format_display(ayat_int))
 
               bg=bg_img.copy() if bg_img.size==(W,H) else bg_img.resize((W,H), Image.LANCZOS)
               draw=ImageDraw.Draw(bg)
               draw.rectangle([0,0,LEFT_W,H],fill=(214,218,228))
-              draw.line([(LEFT_W,0),(LEFT_W,H)],fill=(35,45,85),width=int(3*SCALE))
+              draw.line([(LEFT_W,0),(LEFT_W,H)],fill=(35,45,85),width=int(4*SCALE))
 
               if os.path.exists(LOGO):
                   try:
-                      ls=int(160*SCALE)
+                      ls=int(220*SCALE) # logo bigger
                       logo=Image.open(LOGO).convert("RGBA").resize((ls,ls),Image.LANCZOS)
-                      bg.paste(logo,(int(35*SCALE),int(20*SCALE)),logo)
+                      bg.paste(logo,(int((LEFT_W-ls)//2),int(30*SCALE)),logo)
                   except: pass
 
-              f_bn_s=get_font(False,32); f_bn_m=get_font(False,28); f_bn_l=get_font(False,34); f_ar_l=get_font(True,52)
+              # --- BIGGER BEAUTIFUL FONTS ---
+              f_bn_s=get_font(False, 52) # Sura/Ayat - was 32
+              f_bn_m=get_font(False, 46) # Kanzul Iman - was 28
+              f_bn_l=get_font(False, 58) # Translation - was 34 - BIG
+              f_ar_l=get_font(True, 85) # Arabic - was 52 - VERY BIG
 
-              draw.text((int(40*SCALE),int(210*SCALE)),f"সূরা: {sura_bn}",font=f_bn_s,fill=(0,0,0))
-              draw.text((int(40*SCALE),int(260*SCALE)),f"আয়াত: {ayat_bn}",font=f_bn_s,fill=(0,0,0))
-              draw.line([(int(40*SCALE),int(320*SCALE)),(int(180*SCALE),int(320*SCALE))],fill=(100,100,120),width=int(1*SCALE))
+              # Sura / Ayat - with leading zero
+              draw.text((int(40*SCALE),int(320*SCALE)),f"সূরা: {sura_disp}",font=f_bn_s,fill=(0,0,0))
+              draw.text((int(40*SCALE),int(390*SCALE)),f"আয়াত: {ayat_disp}",font=f_bn_s,fill=(0,0,0))
+              draw.line([(int(40*SCALE),int(470*SCALE)),(int(LEFT_W-40*SCALE),int(470*SCALE))],fill=(100,100,120),width=int(2*SCALE))
 
+              # --- FIX: details.txt in empty space below logo (180deg style) ---
               info=details_map.get(f"{s_no_int:03d}",{})
               if info:
-                  txt=f"{info.get('bn','')} - {info.get('ar','')}"
-                  tmp=Image.new("RGBA",(int(700*SCALE),int(60*SCALE)),(0,0,0,0))
-                  ImageDraw.Draw(tmp).text((0,0),txt,font=f_bn_s,fill=(0,0,0))
-                  bg.paste(tmp.rotate(90,expand=True),(int(25*SCALE),int(340*SCALE)),tmp.rotate(90,expand=True))
+                  # Put in bottom empty area, centered, 90deg rotated (which looks like 180deg from bottom view)
+                  txt=f"{info.get('bn','')} {info.get('ar','')}"
+                  # Create long vertical canvas
+                  tmp_h=int(900*SCALE); tmp_w=int(80*SCALE)
+                  tmp=Image.new("RGBA",(tmp_h, tmp_w),(0,0,0,0))
+                  ImageDraw.Draw(tmp).text((0,0),txt,font=f_bn_s,fill=(40,40,40))
+                  # Rotate 90 deg to be vertical, starting from middle-bottom
+                  rotated=tmp.rotate(90,expand=True)
+                  # Position: logo er niche faka jayga - majhamajhi theke niche
+                  rx = int(35*SCALE)
+                  ry = int(520*SCALE) # Sura/Ayat er niche theke shuru
+                  bg.paste(rotated,(rx,ry),rotated)
 
-              y=int(50*SCALE)
-              for line in item.get('names','').split("\n"):
+              # Arabic + Translation centered vertically
+              arabic_lines=item.get('names','').split("\n")
+              trans_text=item.get('name','')
+
+              # Estimate block height for centering
+              block_h = len(arabic_lines)*int(110*SCALE) + int(40*SCALE) + int(70*SCALE) + 300
+              start_y = (H - block_h)//2
+              if start_y < int(80*SCALE): start_y = int(80*SCALE)
+
+              y=start_y
+              for line in arabic_lines:
                   w=draw.textlength(line,font=f_ar_l)
-                  draw.text((W-int(50*SCALE)-w,y),line,font=f_ar_l,fill=(0,0,0))
-                  y+=int(75*SCALE)
+                  draw.text((W-int(60*SCALE)-w,y),line,font=f_ar_l,fill=(0,0,0))
+                  y+=int(110*SCALE)
 
-              y+=int(30*SCALE)
-              draw.text((LEFT_W+int(30*SCALE),y),"কানযুল ঈমান থেকে অনুবাদ:",font=f_bn_m,fill=(20,40,120))
-              y+=int(50*SCALE)
+              y+=int(40*SCALE)
+              draw.text((LEFT_W+int(50*SCALE),y),"কানযুল ঈমান থেকে অনুবাদ:",font=f_bn_m,fill=(20,40,120))
+              y+=int(75*SCALE)
 
-              # Justify Bengali
-              trans=item.get('name','')
-              max_w=W-LEFT_W-int(80*SCALE)
+              # Justify translation with bigger font
+              max_w=W-LEFT_W-int(100*SCALE)
               lines=[]
-              for para in trans.split("\n"):
+              for para in trans_text.split("\n"):
                   cur=""
                   for w in para.split():
                       test=f"{cur} {w}".strip()
@@ -134,16 +161,16 @@ jobs:
                   if not is_last and len(line.split())>1:
                       extra=max_w-draw.textlength(line,font=f_bn_l)
                       se=extra/(len(line.split())-1)
-                      tx=LEFT_W+int(30*SCALE)
+                      tx=LEFT_W+int(50*SCALE)
                       for w in line.split():
                           draw.text((tx,y),w,font=f_bn_l,fill=(15,25,85))
                           tx+=draw.textlength(w,font=f_bn_l)+draw.textlength(" ",font=f_bn_l)+se
                   else:
-                      draw.text((LEFT_W+int(30*SCALE),y),line,font=f_bn_l,fill=(15,25,85))
-                  y+=int(50*SCALE)
+                      draw.text((LEFT_W+int(50*SCALE),y),line,font=f_bn_l,fill=(15,25,85))
+                  y+=int(80*SCALE)
 
               bg.save(os.path.join(OUT,filename),"JPEG",quality=100,dpi=(300,300),subsampling=0)
-              print(f"Generated {filename}")
+              print(f"Generated {filename} -> Sura:{sura_disp} Ayat:{ayat_disp}")
           PY
 
       - name: Push
@@ -151,5 +178,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add output/
-          git diff --staged --quiet || git commit -m "fix filename 001001.jpg format"
+          git diff --staged --quiet || git commit -m "final: big fonts, bottom details, 01 format"
           git push
