@@ -91,47 +91,33 @@ jobs:
           AYAT_Y=SURA_Y + int(BASE_SURA*SCALE*1.6)
           LINE_Y=AYAT_Y + int(BASE_SURA*SCALE*1.6)
 
-          # নাম দুটোর (আরবি+বাংলা) জন্য নিচে যতটুকু জায়গা আসলে খালি আছে (সূরা/আয়াত লাইনের পর থেকে
-          # ছবির শেষ পর্যন্ত), তার মধ্যেই যেন ফিট করে - না হলে কেটে যায়। তাই না ফিট হলে ফন্ট
-          # auto-shrink হয়ে ছোট হবে, কখনো ছবির বাইরে যাবে না।
-          TOP_GAP=int(50*SCALE)
-          BOTTOM_MARGIN=int(40*SCALE)
-          AVAIL_H = H - LINE_Y - TOP_GAP - BOTTOM_MARGIN
-          DETAILS_FLOOR=26   # ফন্ট এর চেয়ে ছোট হবে না
+          # নাম দুটো (আরবি+বাংলা) এখন ৯০° ঘোরানো হবে না - সাধারণ (0°) আনুভূমিক টেক্সট হিসেবে
+          # বাম কলামে পাশাপাশি বসবে। LEFT_W কলামের ভেতরে (মার্জিন বাদ দিয়ে) দুটো টেক্সট + মাঝের
+          # ছোট গ্যাপ যেন ফিট করে (ওভারল্যাপ না হয়) - না ফিট হলে ফন্ট auto-shrink হবে।
+          SIDE_MARGIN=int(30*SCALE)
+          AVAIL_W_NAMES = LEFT_W - 2*SIDE_MARGIN
+          GAP_X=int(15*SCALE)   # মাঝের স্পেস কমানো হলো
+          DETAILS_FLOOR=22      # ফন্ট এর চেয়ে ছোট হবে না
 
           _dummy_draw=ImageDraw.Draw(Image.new("RGB",(10,10)))
           temp_DET=52
           while True:
               f_ar_det=get_font_by_size(True, temp_DET*SCALE)
               f_bn_det=get_font_by_size(False, temp_DET*SCALE)
-              ar_w=_dummy_draw.textlength(AR_NAME, font=f_ar_det)
-              bn_w=_dummy_draw.textlength(BN_NAME, font=f_bn_det)
-              AR_SLOT_H=int(ar_w + 60*SCALE)
-              BN_SLOT_H=int(bn_w + 60*SCALE)
-              needed=max(AR_SLOT_H, BN_SLOT_H)
-              if needed <= AVAIL_H or temp_DET <= DETAILS_FLOOR:
+              AR_NAME_W=_dummy_draw.textlength(AR_NAME, font=f_ar_det)
+              BN_NAME_W=_dummy_draw.textlength(BN_NAME, font=f_bn_det)
+              needed=AR_NAME_W + GAP_X + BN_NAME_W
+              if needed <= AVAIL_W_NAMES or temp_DET <= DETAILS_FLOOR:
                   BASE_DETAILS_AR=temp_DET
                   BASE_DETAILS_BN=temp_DET
                   break
               temp_DET -= 2
 
-          print(f"AVAIL_H={AVAIL_H}, final details font={BASE_DETAILS_AR}dp, AR_SLOT_H={AR_SLOT_H}, BN_SLOT_H={BN_SLOT_H}")
+          print(f"AVAIL_W_NAMES={AVAIL_W_NAMES}, final details font={BASE_DETAILS_AR}dp, AR_NAME_W={AR_NAME_W}, BN_NAME_W={BN_NAME_W}")
 
-          det_ar_h=int(BASE_DETAILS_AR*SCALE*2.2)
-          det_bn_h=int(BASE_DETAILS_BN*SCALE*2.2)
-
-          # রোটেটেড ইমেজ দুটো একবারই বানানো হচ্ছে (নাম প্রতি ছবিতে একই থাকে)
-          tmp_ar=Image.new("RGBA",(AR_SLOT_H, det_ar_h), (0,0,0,0))
-          _ar_tw=_dummy_draw.textlength(AR_NAME, font=f_ar_det)
-          _ar_tx=max(0, int((AR_SLOT_H-_ar_tw)//2))
-          ImageDraw.Draw(tmp_ar).text((_ar_tx,int(det_ar_h*0.15)), AR_NAME, font=f_ar_det, fill=(20,20,60,255))
-          ROT_AR=tmp_ar.rotate(90, expand=True)   # উপরে: ৯০° আরবি সূরার নাম
-
-          tmp_bn=Image.new("RGBA",(BN_SLOT_H, det_bn_h), (0,0,0,0))
-          _bn_tw=_dummy_draw.textlength(BN_NAME, font=f_bn_det)
-          _bn_tx=max(0, int((BN_SLOT_H-_bn_tw)//2))
-          ImageDraw.Draw(tmp_bn).text((_bn_tx,int(det_bn_h*0.15)), BN_NAME, font=f_bn_det, fill=(20,20,60,255))
-          ROT_BN=tmp_bn.rotate(90, expand=True)   # নিচে: ৯০° বাংলা সূরার নাম
+          NAMES_TOTAL_W = AR_NAME_W + GAP_X + BN_NAME_W
+          NAMES_START_X = max(SIDE_MARGIN, (LEFT_W - NAMES_TOTAL_W)//2)
+          NAMES_Y = LINE_Y + int(50*SCALE)
 
           # SolaimanLipi ফন্টে ":" (কোলন) বাংলা অক্ষরের baseline থেকে একটু নিচে বসে -
           # তাই কোলনটা আলাদাভাবে একটু উপরে তুলে আঁকা হচ্ছে যাতে align দেখতে ভালো লাগে
@@ -228,16 +214,11 @@ jobs:
               draw_label_colon(draw, int(40*SCALE), AYAT_Y, "আয়াত", ayat_disp, f_sura, (0,0,0))
               draw.line([(int(40*SCALE), LINE_Y), (int(LEFT_W-40*SCALE), LINE_Y)], fill=(100,100,120), width=2)
 
-              # DETAILS - বাম পাশে ৯০° আরবি সূরার নাম, তার পাশে ৯০° বাংলা সূরার নাম (side-by-side)
-              # (workflow_dispatch input থেকে আসা নাম, auto-shrink করা ফন্টে, প্রতিটা ছবিতে একই বক্সে বসছে)
-              gap_x=int(30*SCALE)
-              total_w=ROT_AR.width+gap_x+ROT_BN.width
-              start_x=max(0, (LEFT_W-total_w)//2)
-              ry=LINE_Y+TOP_GAP
-              ax=start_x
-              bg.paste(ROT_AR, (int(ax), ry), ROT_AR)
-              bx=ax+ROT_AR.width+gap_x
-              bg.paste(ROT_BN, (int(bx), ry), ROT_BN)
+              # DETAILS - বাম পাশে আরবি সূরার নাম, তার পাশে বাংলা সূরার নাম (0°, side-by-side, ওভারল্যাপ-মুক্ত)
+              # (workflow_dispatch input থেকে আসা নাম, auto-shrink করা ফন্টে, প্রতিটা ছবিতে একই পজিশনে বসছে)
+              draw.text((NAMES_START_X, NAMES_Y), AR_NAME, font=f_ar_det, fill=(20,20,60))
+              bx=NAMES_START_X+AR_NAME_W+GAP_X
+              draw.text((bx, NAMES_Y), BN_NAME, font=f_bn_det, fill=(20,20,60))
 
               y=start_y
               for line in arabic_lines:
