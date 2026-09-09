@@ -41,11 +41,8 @@ jobs:
 
           W,H=3840,2160
           try:
-              if os.path.exists(BG):
-                  bg_img=Image.open(BG).convert("RGB")
-                  W,H=bg_img.size
-              else:
-                  bg_img=Image.new("RGB",(W,H),(232,236,244))
+              bg_img=Image.open(BG).convert("RGB")
+              W,H=bg_img.size
           except:
               bg_img=Image.new("RGB",(W,H),(232,236,244))
 
@@ -61,7 +58,7 @@ jobs:
           def get_font(is_ar, dp):
               return get_font_by_size(is_ar, dp*SCALE)
 
-          # details.txt load - 2 line = 1 sura
+          # details.txt - 2 line = 1 sura
           details_map={}
           if os.path.exists(DETAILS):
               with open(DETAILS, encoding="utf-8") as f:
@@ -96,18 +93,21 @@ jobs:
                       bg.paste(logo,(int((LEFT_W-ls)//2), int(30*SCALE)), logo)
                   except: pass
 
+              # ===== YOUR REQUIREMENT =====
               BASE_SURA=22
-              BASE_KANZUL=38
-              BASE_BN=48
-              BASE_AR=60
+              BASE_DETAILS_AR=22
+              BASE_DETAILS_BN=22
+              BASE_KANZUL=40
+              BASE_BN=52
+              BASE_AR=62
 
               f_sura=get_font(False, BASE_SURA)
               f_kanzul=get_font(False, BASE_KANZUL)
-              f_bn=get_font(False, BASE_BN)
-              f_ar=get_font(True, BASE_AR)
+
               max_w=W-LEFT_W-int(140*SCALE)
 
               # Arabic wrap
+              f_ar=get_font(True, BASE_AR)
               arabic_raw=item.get('names','').strip()
               arabic_lines=[]
               cur=""
@@ -120,78 +120,82 @@ jobs:
                       cur=w
               if cur: arabic_lines.append(cur)
 
-              # Bangla wrap
-              cleaned=clean_name(item.get('name',''))
-              bn_lines=[]
-              cur=""
-              for w in cleaned.split():
-                  test=f"{cur} {w}".strip()
-                  if draw.textlength(test, font=f_bn) <= max_w:
-                      cur=test
-                  else:
-                      if cur: bn_lines.append(cur)
-                      cur=w
-              if cur: bn_lines.append(cur)
+              # Bangla wrap with auto-shrink to avoid cut
+              while True:
+                  f_bn=get_font(False, BASE_BN)
+                  cleaned=clean_name(item.get('name',''))
+                  bn_lines=[]
+                  cur=""
+                  for w in cleaned.split():
+                      test=f"{cur} {w}".strip()
+                      if draw.textlength(test, font=f_bn) <= max_w:
+                          cur=test
+                      else:
+                          if cur: bn_lines.append(cur)
+                          cur=w
+                  if cur: bn_lines.append(cur)
 
-              # Left panel Sura/Ayat
+                  # হিসাব করো বাংলা কাটবে কিনা
+                  needed_h = int(350*SCALE) + len(arabic_lines)*int(BASE_AR*SCALE*1.5) + int(120*SCALE) + len(bn_lines)*int(BASE_BN*SCALE*1.4)
+                  if needed_h < H - int(50*SCALE) or BASE_BN <= 28:
+                      break
+                  BASE_BN -= 2 # কাটলে ফন্ট ছোট হবে
+
+              # Left panel Sura/Ayat - 22dp
               draw.text((int(40*SCALE), int(320*SCALE)), f"সূরা: {sura_disp}", font=f_sura, fill=(0,0,0))
               draw.text((int(40*SCALE), int(370*SCALE)), f"আয়াত: {ayat_disp}", font=f_sura, fill=(0,0,0))
               draw.line([(int(40*SCALE), int(430*SCALE)), (int(LEFT_W-40*SCALE), int(430*SCALE))], fill=(100,100,120), width=2)
 
-              # ===== FIX: DETAILS ALWAYS VISIBLE =====
+              # ===== DETAILS - 90° ARABIC FIRST, THEN BANGLA BELOW - 22dp ALWAYS =====
               info=details_map.get(f"{s_no:03d}", details_map.get("001"))
               if info:
                   ar_txt=info.get('ar','')
                   bn_txt=info.get('bn','')
-                  # ফন্ট সাইজ অটো ছোট হবে যাতে সব ছবিতেই আঁটে
-                  det_ar_size = 22 * SCALE
-                  det_bn_size = 22 * SCALE
-                  while True:
-                      f_ar_det=get_font_by_size(True, det_ar_size)
-                      f_bn_det=get_font_by_size(False, det_bn_size)
-                      ar_w=int(draw.textlength(ar_txt, font=f_ar_det)+80*SCALE)
-                      bn_w=int(draw.textlength(bn_txt, font=f_bn_det)+80*SCALE)
-                      tmp_ar=Image.new("RGBA",(ar_w, int(80*SCALE)), (0,0,0,0))
-                      ImageDraw.Draw(tmp_ar).text((0,10), ar_txt, font=f_ar_det, fill=(20,20,60,255))
-                      rot_ar=tmp_ar.rotate(90, expand=True)
-                      tmp_bn=Image.new("RGBA",(bn_w, int(80*SCALE)), (0,0,0,0))
-                      ImageDraw.Draw(tmp_bn).text((0,10), bn_txt, font=f_bn_det, fill=(20,20,60,255))
-                      rot_bn=tmp_bn.rotate(90, expand=True)
+                  f_ar_det=get_font_by_size(True, BASE_DETAILS_AR*SCALE)
+                  f_bn_det=get_font_by_size(False, BASE_DETAILS_BN*SCALE)
 
-                      total_h = rot_ar.height + rot_bn.height + int(60*SCALE)
-                      if total_h < (H - int(480*SCALE)) or det_ar_size < 12*SCALE:
-                          break
-                      det_ar_size -= 1*SCALE
-                      det_bn_size -= 1*SCALE
+                  ar_w=int(draw.textlength(ar_txt, font=f_ar_det)+100*SCALE)
+                  tmp_ar=Image.new("RGBA",(ar_w, int(90*SCALE)), (0,0,0,0))
+                  ImageDraw.Draw(tmp_ar).text((0,15), ar_txt, font=f_ar_det, fill=(20,20,60,255))
+                  rot_ar=tmp_ar.rotate(90, expand=True)
+
+                  bn_w=int(draw.textlength(bn_txt, font=f_bn_det)+100*SCALE)
+                  tmp_bn=Image.new("RGBA",(bn_w, int(90*SCALE)), (0,0,0,0))
+                  ImageDraw.Draw(tmp_bn).text((0,15), bn_txt, font=f_bn_det, fill=(20,20,60,255))
+                  rot_bn=tmp_bn.rotate(90, expand=True)
 
                   ry=int(480*SCALE)
                   rx_ar=int((LEFT_W-rot_ar.width)//2)
                   bg.paste(rot_ar, (rx_ar, ry), rot_ar)
-                  ry+=rot_ar.height+int(20*SCALE)
+                  ry+=rot_ar.height+int(30*SCALE)
+
                   rx_bn=int((LEFT_W-rot_bn.width)//2)
+                  # সব ছবিতে থাকবে, কাটবে না - জায়গা কমলে উপরে চলে যাবে না
+                  if ry+rot_bn.height > H-int(30*SCALE):
+                      ry = H - rot_bn.height - int(30*SCALE)
                   bg.paste(rot_bn, (rx_bn, ry), rot_bn)
 
-              # Main content
+              # Draw main
               y=int(350*SCALE)
               for line in arabic_lines:
                   w=draw.textlength(line, font=f_ar)
                   draw.text((W-int(70*SCALE)-w, y), line, font=f_ar, fill=(0,0,0))
-                  y+=int(BASE_AR*SCALE*1.45)
+                  y+=int(BASE_AR*SCALE*1.5)
 
-              y+=int(40*SCALE)
+              y+=int(50*SCALE)
               draw.text((LEFT_W+int(50*SCALE), y), "কানযুল ঈমান থেকে অনুবাদ:", font=f_kanzul, fill=(20,40,120))
-              y+=int(70*SCALE)
+              y+=int(75*SCALE)
 
-              # Bangla with Justify - ফাঁকা কন্ট্রোল সহ
+              # Bangla with Justify (kept)
               for i,line in enumerate(bn_lines):
-                  if y>H-int(60*SCALE): break
+                  if y>H-int(40*SCALE): break
                   words=line.split()
                   is_last=i==len(bn_lines)-1
                   if not is_last and len(words)>1:
                       base_w=sum(draw.textlength(w, font=f_bn) for w in words) + draw.textlength(" ", font=f_bn)*(len(words)-1)
                       extra=max_w-base_w
                       gap=extra/(len(words)-1) if len(words)>1 else 0
-                      if gap>0 and gap < 65*SCALE:
+                      if gap>0 and gap < 70*SCALE:
                           tx=LEFT_W+int(50*SCALE)
                           for w in words:
                               draw.text((tx,y), w, font=f_bn, fill=(15,25,85))
@@ -211,5 +215,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add output/
-          git diff --staged --quiet || git commit -m "fix: details always visible + justify kept"
+          git diff --staged --quiet || git commit -m "final: sura ayat 22dp, details 90deg 22dp, no cut"
           git push
