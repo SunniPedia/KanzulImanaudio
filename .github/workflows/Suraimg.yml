@@ -19,7 +19,7 @@ jobs:
         run: |
           python3 << 'PY'
           from PIL import Image, ImageDraw, ImageFont
-          import json, os, re
+          import json, os, re, shutil
 
           BG="src/background.jpg"
           LOGO="src/logo.jpg"
@@ -28,6 +28,11 @@ jobs:
           OUT="output"
           FONT_BN="src/solaimanlipi.ttf"
           FONT_AR="src/noorehuda.ttf"
+
+          # পুরানো output ডিলিট - যাতে নতুন ছবি ১০০% বানায়
+          if os.path.exists(OUT):
+              shutil.rmtree(OUT)
+          os.makedirs(OUT, exist_ok=True)
 
           EN_TO_BN=str.maketrans("0123456789","০১২৩৪৫৬৭৮৯")
           def to_bangla_num(s): return str(s).translate(EN_TO_BN)
@@ -40,34 +45,30 @@ jobs:
               return re.sub(r'\s{2,}', ' ', text).strip()
 
           W,H=3840,2160
-          try:
-              bg_img=Image.open(BG).convert("RGB")
-              W,H=bg_img.size
-          except:
-              bg_img=Image.new("RGB",(W,H),(232,236,244))
+          bg_img=Image.open(BG).convert("RGB") if os.path.exists(BG) else Image.new("RGB",(W,H),(232,236,244))
+          W,H=bg_img.size
 
           LEFT_W=int(W*0.22)
           SCALE=W/1280
+          print(f"BG Size: {W}x{H}, SCALE: {SCALE}, LEFT_W: {LEFT_W}")
 
           def get_font_by_size(is_ar, px_size):
               p=FONT_AR if is_ar else FONT_BN
-              if os.path.exists(p):
-                  try: return ImageFont.truetype(p, int(px_size))
-                  except: pass
-              return ImageFont.load_default()
+              try: return ImageFont.truetype(p, int(px_size))
+              except: return ImageFont.load_default()
           def get_font(is_ar, dp):
               return get_font_by_size(is_ar, dp*SCALE)
 
-          # details.txt - 2 line = 1 sura
           details_map={}
           if os.path.exists(DETAILS):
               with open(DETAILS, encoding="utf-8") as f:
                   lines=[l.strip() for l in f if l.strip()]
+              print(f"DETAILS.TXT lines: {len(lines)}")
               for i in range(0,len(lines),2):
                   k=str((i//2)+1).zfill(3)
                   details_map[k]={"ar":lines[i],"bn":lines[i+1] if i+1<len(lines) else ""}
+          print(f"Details map: {details_map}")
 
-          os.makedirs(OUT, exist_ok=True)
           with open(DATA, encoding="utf-8") as f:
               data=json.load(f)
 
@@ -81,7 +82,7 @@ jobs:
               sura_disp=to_bangla_num(disp(sura_int))
               ayat_disp=to_bangla_num(disp(ayat_int))
 
-              bg=bg_img.copy() if bg_img.size==(W,H) else bg_img.resize((W,H), Image.LANCZOS)
+              bg=bg_img.resize((W,H), Image.LANCZOS)
               draw=ImageDraw.Draw(bg)
               draw.rectangle([0,0,LEFT_W,H], fill=(214,218,228))
               draw.line([(LEFT_W,0),(LEFT_W,H)], fill=(35,45,85), width=int(4*SCALE))
@@ -93,20 +94,19 @@ jobs:
                       bg.paste(logo,(int((LEFT_W-ls)//2), int(30*SCALE)), logo)
                   except: pass
 
-              # ===== YOUR REQUIREMENT =====
+              # === তোমার চাওয়া মতো 22dp ===
               BASE_SURA=22
               BASE_DETAILS_AR=22
               BASE_DETAILS_BN=22
-              BASE_KANZUL=40
-              BASE_BN=52
+              BASE_KANZUL=42
+              BASE_BN=52 # বাংলা বড়, যাতে কাটার আগে শ্রিঙ্ক হয়
               BASE_AR=62
 
               f_sura=get_font(False, BASE_SURA)
               f_kanzul=get_font(False, BASE_KANZUL)
-
               max_w=W-LEFT_W-int(140*SCALE)
 
-              # Arabic wrap
+              # Arabic
               f_ar=get_font(True, BASE_AR)
               arabic_raw=item.get('names','').strip()
               arabic_lines=[]
@@ -120,9 +120,10 @@ jobs:
                       cur=w
               if cur: arabic_lines.append(cur)
 
-              # Bangla wrap with auto-shrink to avoid cut
+              # Bangla - auto shrink যাতে না কাটে
+              temp_BN = BASE_BN
               while True:
-                  f_bn=get_font(False, BASE_BN)
+                  f_bn=get_font(False, temp_BN)
                   cleaned=clean_name(item.get('name',''))
                   bn_lines=[]
                   cur=""
@@ -134,19 +135,20 @@ jobs:
                           if cur: bn_lines.append(cur)
                           cur=w
                   if cur: bn_lines.append(cur)
-
-                  # হিসাব করো বাংলা কাটবে কিনা
-                  needed_h = int(350*SCALE) + len(arabic_lines)*int(BASE_AR*SCALE*1.5) + int(120*SCALE) + len(bn_lines)*int(BASE_BN*SCALE*1.4)
-                  if needed_h < H - int(50*SCALE) or BASE_BN <= 28:
+                  needed = int(350*SCALE) + len(arabic_lines)*int(BASE_AR*SCALE*1.5) + 120*SCALE + len(bn_lines)*int(temp_BN*SCALE*1.45)
+                  if needed < H - 80*SCALE or temp_BN <= 30:
+                      BASE_BN = temp_BN
                       break
-                  BASE_BN -= 2 # কাটলে ফন্ট ছোট হবে
+                  temp_BN -= 2
 
-              # Left panel Sura/Ayat - 22dp
+              f_bn=get_font(False, BASE_BN)
+
+              # Sura Ayat 22dp
               draw.text((int(40*SCALE), int(320*SCALE)), f"সূরা: {sura_disp}", font=f_sura, fill=(0,0,0))
               draw.text((int(40*SCALE), int(370*SCALE)), f"আয়াত: {ayat_disp}", font=f_sura, fill=(0,0,0))
               draw.line([(int(40*SCALE), int(430*SCALE)), (int(LEFT_W-40*SCALE), int(430*SCALE))], fill=(100,100,120), width=2)
 
-              # ===== DETAILS - 90° ARABIC FIRST, THEN BANGLA BELOW - 22dp ALWAYS =====
+              # DETAILS - 90° Arabic উপরে, Bangla নিচে - 22dp সব ছবিতে
               info=details_map.get(f"{s_no:03d}", details_map.get("001"))
               if info:
                   ar_txt=info.get('ar','')
@@ -165,17 +167,10 @@ jobs:
                   rot_bn=tmp_bn.rotate(90, expand=True)
 
                   ry=int(480*SCALE)
-                  rx_ar=int((LEFT_W-rot_ar.width)//2)
-                  bg.paste(rot_ar, (rx_ar, ry), rot_ar)
+                  bg.paste(rot_ar, (int((LEFT_W-rot_ar.width)//2), ry), rot_ar)
                   ry+=rot_ar.height+int(30*SCALE)
+                  bg.paste(rot_bn, (int((LEFT_W-rot_bn.width)//2), ry), rot_bn)
 
-                  rx_bn=int((LEFT_W-rot_bn.width)//2)
-                  # সব ছবিতে থাকবে, কাটবে না - জায়গা কমলে উপরে চলে যাবে না
-                  if ry+rot_bn.height > H-int(30*SCALE):
-                      ry = H - rot_bn.height - int(30*SCALE)
-                  bg.paste(rot_bn, (rx_bn, ry), rot_bn)
-
-              # Draw main
               y=int(350*SCALE)
               for line in arabic_lines:
                   w=draw.textlength(line, font=f_ar)
@@ -186,16 +181,14 @@ jobs:
               draw.text((LEFT_W+int(50*SCALE), y), "কানযুল ঈমান থেকে অনুবাদ:", font=f_kanzul, fill=(20,40,120))
               y+=int(75*SCALE)
 
-              # Bangla with Justify (kept)
               for i,line in enumerate(bn_lines):
-                  if y>H-int(40*SCALE): break
                   words=line.split()
                   is_last=i==len(bn_lines)-1
                   if not is_last and len(words)>1:
                       base_w=sum(draw.textlength(w, font=f_bn) for w in words) + draw.textlength(" ", font=f_bn)*(len(words)-1)
                       extra=max_w-base_w
                       gap=extra/(len(words)-1) if len(words)>1 else 0
-                      if gap>0 and gap < 70*SCALE:
+                      if 0 < gap < 70*SCALE:
                           tx=LEFT_W+int(50*SCALE)
                           for w in words:
                               draw.text((tx,y), w, font=f_bn, fill=(15,25,85))
@@ -206,14 +199,15 @@ jobs:
                       draw.text((LEFT_W+int(50*SCALE), y), line, font=f_bn, fill=(15,25,85))
                   y+=int(BASE_BN*SCALE*1.4)
 
-              bg.save(os.path.join(OUT, filename), "JPEG", quality=95, dpi=(300,300), subsampling=0)
-              print(f"Done {filename}")
+              bg.save(os.path.join(OUT, filename), "JPEG", quality=95, subsampling=0)
+              print(f"Done {filename} with BN {BASE_BN}dp")
+
           PY
 
       - name: Push output
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add output/
-          git diff --staged --quiet || git commit -m "final: sura ayat 22dp, details 90deg 22dp, no cut"
+          git add -f output/
+          git commit -m "force rebuild all images - fix cut and details 22dp" || echo "no changes"
           git push
