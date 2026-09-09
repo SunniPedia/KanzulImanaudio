@@ -76,9 +76,9 @@ jobs:
           with open(DATA, encoding="utf-8") as f:
               data=json.load(f)
 
-          BASE_SURA=48
-          BASE_DETAILS_AR=68 # বড় করা হলো
-          BASE_DETAILS_BN=68 # বড় করা হলো
+          BASE_SURA=40
+          BASE_DETAILS_AR=68
+          BASE_DETAILS_BN=68
           BASE_KANZUL=42
           BASE_BN=52
           BASE_AR=80
@@ -87,14 +87,18 @@ jobs:
           AYAT_Y=SURA_Y + int(BASE_SURA*SCALE*1.6)
           LINE_Y=AYAT_Y + int(BASE_SURA*SCALE*1.6)
 
-          # === FIX: বড় ফন্ট + center align + উপরে-নিচে ===
+          # === FIX: Bottom Margin + Center Logic ===
+          BOTTOM_MARGIN_DP = 5
+          BOTTOM_MARGIN = int(BOTTOM_MARGIN_DP * SCALE)
+          TOP_MARGIN = int(120*SCALE)
+
           SIDE_MARGIN=int(30*SCALE)
           AVAIL_W_NAMES = LEFT_W - 2*SIDE_MARGIN
-          DETAILS_FLOOR=32 # আগে 22 ছিল, এখন বড় রাখা হলো
+          DETAILS_FLOOR=32
           GAP_Y_DETAILS=int(22*SCALE)
 
           _dummy_draw=ImageDraw.Draw(Image.new("RGB",(10,10)))
-          temp_DET=72 # আগে 52 ছিল, এখন 72 থেকে শুরু
+          temp_DET=72
           while True:
               f_ar_det=get_font_by_size(True, temp_DET*SCALE)
               f_bn_det=get_font_by_size(False, temp_DET*SCALE)
@@ -106,7 +110,7 @@ jobs:
                   break
               temp_DET -= 2
 
-          print(f"AVAIL_W_NAMES={AVAIL_W_NAMES}, final details font={BASE_DETAILS_AR}dp, AR_NAME_W={AR_NAME_W}, BN_NAME_W={BN_NAME_W}")
+          print(f"AVAIL_W_NAMES={AVAIL_W_NAMES}, final details font={BASE_DETAILS_AR}dp")
 
           NAMES_Y = LINE_Y + int(55*SCALE)
 
@@ -118,6 +122,19 @@ jobs:
               colon_w = draw.textlength(":", font=font)
               if value:
                   draw.text((x+label_w+colon_w, y), " "+value, font=font, fill=fill)
+
+          def draw_centered_label_colon(draw, y, label, value, font, fill):
+              label_w = draw.textlength(label, font=font)
+              colon_w = draw.textlength(":", font=font)
+              space_w = draw.textlength(" ", font=font)
+              value_w = draw.textlength(" "+value, font=font) if value else 0
+              total_w = label_w + colon_w + value_w
+              start_x = (LEFT_W - total_w) // 2
+              draw.text((start_x, y), label, font=font, fill=fill)
+              colon_up = int(font.size * 0.12)
+              draw.text((start_x+label_w, y-colon_up), ":", font=font, fill=fill)
+              if value:
+                  draw.text((start_x+label_w+colon_w, y), " "+value, font=font, fill=fill)
 
           for item in data:
               sura_int=extract_number(item.get('sura','0'))
@@ -179,7 +196,7 @@ jobs:
                           cur=w
                   if cur: bn_lines.append(cur)
                   needed = len(arabic_lines)*int(BASE_AR*SCALE*1.5) + int(50*SCALE) + int(75*SCALE) + len(bn_lines)*int(temp_BN*SCALE*1.45)
-                  if needed < H - 80*SCALE or temp_BN <= 30:
+                  if needed < H - TOP_MARGIN - BOTTOM_MARGIN or temp_BN <= 30:
                       BASE_BN = temp_BN
                       break
                   temp_BN -= 2
@@ -192,14 +209,16 @@ jobs:
               bn_block_h = len(bn_lines) * int(BASE_BN*SCALE*1.4)
               total_block_h = arabic_block_h + gap_after_arabic + kanzul_block_h + bn_block_h
 
-              min_top = int(120*SCALE)
-              start_y = max(min_top, (H - total_block_h) // 2)
+              start_y = max(TOP_MARGIN, (H - total_block_h - BOTTOM_MARGIN) // 2)
+              if start_y + total_block_h + BOTTOM_MARGIN > H:
+                  start_y = H - total_block_h - BOTTOM_MARGIN
 
-              draw_label_colon(draw, int(40*SCALE), SURA_Y, "সূরা", sura_disp, f_sura, (0,0,0))
-              draw_label_colon(draw, int(40*SCALE), AYAT_Y, "আয়াত", ayat_disp, f_sura, (0,0,0))
+              # === CENTERED SURA AYAT ===
+              draw_centered_label_colon(draw, SURA_Y, "সূরা", sura_disp, f_sura, (0,0,0))
+              draw_centered_label_colon(draw, AYAT_Y, "আয়াত", ayat_disp, f_sura, (0,0,0))
               draw.line([(int(40*SCALE), LINE_Y), (int(LEFT_W-40*SCALE), LINE_Y)], fill=(100,100,120), width=2)
 
-              # DETAILS - center aligned, উপরে আরবি নিচে বাংলা
+              # DETAILS - center aligned
               f_ar_det=get_font_by_size(True, BASE_DETAILS_AR*SCALE)
               f_bn_det=get_font_by_size(False, BASE_DETAILS_BN*SCALE)
               ar_w = draw.textlength(AR_NAME, font=f_ar_det)
@@ -227,7 +246,7 @@ jobs:
                   if not is_last and len(words)>1:
                       base_w=sum(draw.textlength(w, font=f_bn) for w in words) + draw.textlength(" ", font=f_bn)*(len(words)-1)
                       extra=max_w-base_w
-                      gap=extra/(len(words)-1) if len(words)>1 else 0
+                      gap=extra/(len(words)-1) if len(words)>1 else 1)
                       if 0 < gap < 70*SCALE:
                           tx=LEFT_W+int(50*SCALE)
                           for w in words:
@@ -256,5 +275,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -f output/
-          git commit -m "font bigger + center + artifact upload" || echo "no changes"
+          git commit -m "center sura ayat + bottom margin 5dp" || echo "no changes"
           git push
