@@ -2,6 +2,15 @@ name: Generate Ayah Images
 
 on:
   workflow_dispatch:
+    inputs:
+      arabic_name:
+        description: 'আরবি সূরার নাম (৯০° রোটেটেড লেখা হবে, উপরে)'
+        required: true
+        type: string
+      bangla_name:
+        description: 'বাংলা সূরার নাম (৯০° রোটেটেড লেখা হবে, নিচে)'
+        required: true
+        type: string
 
 jobs:
   build:
@@ -16,6 +25,9 @@ jobs:
       - run: pip install Pillow
 
       - name: Generate Fixed Images
+        env:
+          ARABIC_NAME: ${{ inputs.arabic_name }}
+          BANGLA_NAME: ${{ inputs.bangla_name }}
         run: |
           python3 << 'PY'
           from PIL import Image, ImageDraw, ImageFont
@@ -24,10 +36,14 @@ jobs:
           BG="src/background.jpg"
           LOGO="src/logo.jpg"
           DATA="src/data.json"
-          DETAILS="src/details.txt"
           OUT="output"
           FONT_BN="src/solaimanlipi.ttf"
           FONT_AR="src/noorehuda.ttf"
+
+          # ৯০° রোটেটেড টেক্সট এখন details.txt থেকে না, workflow_dispatch input থেকে আসছে
+          AR_NAME=os.environ.get("ARABIC_NAME","").strip()
+          BN_NAME=os.environ.get("BANGLA_NAME","").strip()
+          print(f"ARABIC_NAME={AR_NAME!r}, BANGLA_NAME={BN_NAME!r}")
 
           # পুরানো output ডিলিট - যাতে নতুন ছবি ১০০% বানায়
           if os.path.exists(OUT):
@@ -59,23 +75,13 @@ jobs:
           def get_font(is_ar, dp):
               return get_font_by_size(is_ar, dp*SCALE)
 
-          details_map={}
-          if os.path.exists(DETAILS):
-              with open(DETAILS, encoding="utf-8") as f:
-                  lines=[l.strip() for l in f if l.strip()]
-              print(f"DETAILS.TXT lines: {len(lines)}")
-              for i in range(0,len(lines),2):
-                  k=str((i//2)+1).zfill(3)
-                  details_map[k]={"ar":lines[i],"bn":lines[i+1] if i+1<len(lines) else ""}
-          print(f"Details map: {details_map}")
-
           with open(DATA, encoding="utf-8") as f:
               data=json.load(f)
 
           # === ফন্ট সাইজ (dp) ===
-          BASE_SURA=48              # সূরা/আয়াত (আরও বড় করা হলো)
-          BASE_DETAILS_AR=52        # details.txt আরবি (Image 2 এর মতো বড়)
-          BASE_DETAILS_BN=52        # details.txt বাংলা (Image 2 এর মতো বড়)
+          BASE_SURA=48              # সূরা/আয়াত
+          BASE_DETAILS_AR=52        # ইনপুট থেকে পাওয়া আরবি সূরার নাম
+          BASE_DETAILS_BN=52        # ইনপুট থেকে পাওয়া বাংলা সূরার নাম
           BASE_KANZUL=42
           BASE_BN=52                # বাংলা অনুবাদ - auto shrink হবে
           BASE_AR=80                # আরবি আয়াত - auto shrink হবে
@@ -83,19 +89,32 @@ jobs:
           f_ar_det=get_font_by_size(True, BASE_DETAILS_AR*SCALE)
           f_bn_det=get_font_by_size(False, BASE_DETAILS_BN*SCALE)
 
-          # === সব সূরার details.txt এন্ট্রি স্কেন করে সবচেয়ে বড় নামের জন্য যত জায়গা লাগে
-          #     সেটাকেই ফিক্সড "স্লট" সাইজ ধরা হচ্ছে - তাই প্রতিটা ছবিতে বক্সের সাইজ/পজিশন সমান থাকবে
+          # === ৯০° লেখার জন্য ফিক্সড "স্লট" সাইজ - AR_NAME/BN_NAME একবারই ইনপুট থেকে আসে,
+          #     তাই সব ছবিতে বক্সের সাইজ/পজিশন সমান থাকবে
           _dummy_draw=ImageDraw.Draw(Image.new("RGB",(10,10)))
-          _ar_widths=[_dummy_draw.textlength(v.get('ar',''), font=f_ar_det) for v in details_map.values()]
-          _bn_widths=[_dummy_draw.textlength(v.get('bn',''), font=f_bn_det) for v in details_map.values()]
-          AR_SLOT_H=int((max(_ar_widths) if _ar_widths else 0) + 60*SCALE)
-          BN_SLOT_H=int((max(_bn_widths) if _bn_widths else 0) + 60*SCALE)
+          AR_SLOT_H=int(_dummy_draw.textlength(AR_NAME, font=f_ar_det) + 60*SCALE)
+          BN_SLOT_H=int(_dummy_draw.textlength(BN_NAME, font=f_bn_det) + 60*SCALE)
           print(f"AR_SLOT_H={AR_SLOT_H}, BN_SLOT_H={BN_SLOT_H}")
+
+          det_ar_h=int(BASE_DETAILS_AR*SCALE*2.2)
+          det_bn_h=int(BASE_DETAILS_BN*SCALE*2.2)
+
+          # রোটেটেড ইমেজ দুটো একবারই বানানো হচ্ছে (নাম প্রতি ছবিতে একই থাকে)
+          tmp_ar=Image.new("RGBA",(AR_SLOT_H, det_ar_h), (0,0,0,0))
+          _ar_tw=_dummy_draw.textlength(AR_NAME, font=f_ar_det)
+          _ar_tx=max(0, int((AR_SLOT_H-_ar_tw)//2))
+          ImageDraw.Draw(tmp_ar).text((_ar_tx,int(det_ar_h*0.15)), AR_NAME, font=f_ar_det, fill=(20,20,60,255))
+          ROT_AR=tmp_ar.rotate(90, expand=True)   # উপরে: ৯০° আরবি সূরার নাম
+
+          tmp_bn=Image.new("RGBA",(BN_SLOT_H, det_bn_h), (0,0,0,0))
+          _bn_tw=_dummy_draw.textlength(BN_NAME, font=f_bn_det)
+          _bn_tx=max(0, int((BN_SLOT_H-_bn_tw)//2))
+          ImageDraw.Draw(tmp_bn).text((_bn_tx,int(det_bn_h*0.15)), BN_NAME, font=f_bn_det, fill=(20,20,60,255))
+          ROT_BN=tmp_bn.rotate(90, expand=True)   # নিচে: ৯০° বাংলা সূরার নাম
 
           for item in data:
               sura_int=extract_number(item.get('sura','0'))
               ayat_int=extract_number(item.get('verses','0'))
-              s_no=extract_number(item.get('sura_no_en',sura_int))
               filename=f"{sura_int:03d}{ayat_int:03d}.jpg"
 
               def disp(n): return f"0{n}" if n<10 else str(n)
@@ -183,34 +202,13 @@ jobs:
               draw.line([(int(40*SCALE), line_y), (int(LEFT_W-40*SCALE), line_y)], fill=(100,100,120), width=2)
 
               # DETAILS - উপরে ৯০° আরবি সূরার নাম, নিচে ৯০° বাংলা সূরার নাম
-              # প্রতিটা নাম তার নিজের ফিক্সড স্লটের (AR_SLOT_H / BN_SLOT_H) মাঝখানে বসছে,
-              # তাই নামের length যা-ই হোক, বক্সের সাইজ/পজিশন সব ছবিতে সমান থাকবে
-              info=details_map.get(f"{s_no:03d}", details_map.get("001"))
-              if info:
-                  ar_txt=info.get('ar','')
-                  bn_txt=info.get('bn','')
-
-                  det_ar_h=int(BASE_DETAILS_AR*SCALE*2.2)
-                  det_bn_h=int(BASE_DETAILS_BN*SCALE*2.2)
-
-                  tmp_ar=Image.new("RGBA",(AR_SLOT_H, det_ar_h), (0,0,0,0))
-                  ar_tw=draw.textlength(ar_txt, font=f_ar_det)
-                  ar_tx=max(0, int((AR_SLOT_H-ar_tw)//2))
-                  ImageDraw.Draw(tmp_ar).text((ar_tx,int(det_ar_h*0.15)), ar_txt, font=f_ar_det, fill=(20,20,60,255))
-                  rot_ar=tmp_ar.rotate(90, expand=True)   # rot_ar.height == AR_SLOT_H (ফিক্সড)
-
-                  tmp_bn=Image.new("RGBA",(BN_SLOT_H, det_bn_h), (0,0,0,0))
-                  bn_tw=draw.textlength(bn_txt, font=f_bn_det)
-                  bn_tx=max(0, int((BN_SLOT_H-bn_tw)//2))
-                  ImageDraw.Draw(tmp_bn).text((bn_tx,int(det_bn_h*0.15)), bn_txt, font=f_bn_det, fill=(20,20,60,255))
-                  rot_bn=tmp_bn.rotate(90, expand=True)   # rot_bn.height == BN_SLOT_H (ফিক্সড)
-
-                  ry=line_y+int(50*SCALE)
-                  ax=max(0, (LEFT_W-rot_ar.width)//2)
-                  bg.paste(rot_ar, (int(ax), ry), rot_ar)
-                  ry+=AR_SLOT_H+int(40*SCALE)   # ফিক্সড গ্যাপ - সব ছবিতে সমান
-                  bx=max(0, (LEFT_W-rot_bn.width)//2)
-                  bg.paste(rot_bn, (int(bx), ry), rot_bn)
+              # (workflow_dispatch input থেকে আসা নাম, প্রতিটা ছবিতে একই বক্সে বসছে)
+              ry=line_y+int(50*SCALE)
+              ax=max(0, (LEFT_W-ROT_AR.width)//2)
+              bg.paste(ROT_AR, (int(ax), ry), ROT_AR)
+              ry+=AR_SLOT_H+int(40*SCALE)   # ফিক্সড গ্যাপ - সব ছবিতে সমান
+              bx=max(0, (LEFT_W-ROT_BN.width)//2)
+              bg.paste(ROT_BN, (int(bx), ry), ROT_BN)
 
               y=start_y
               for line in arabic_lines:
@@ -250,5 +248,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -f output/
-          git commit -m "fixed-slot consistent details.txt sizing, bigger sura/ayat font" || echo "no changes"
+          git commit -m "sura name now from workflow_dispatch inputs instead of details.txt" || echo "no changes"
           git push
