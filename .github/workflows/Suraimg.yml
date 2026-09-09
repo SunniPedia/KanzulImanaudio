@@ -76,10 +76,9 @@ jobs:
           with open(DATA, encoding="utf-8") as f:
               data=json.load(f)
 
-          # === ফন্ট সাইজ (dp) ===
           BASE_SURA=48
-          BASE_DETAILS_AR=52
-          BASE_DETAILS_BN=52
+          BASE_DETAILS_AR=68 # বড় করা হলো
+          BASE_DETAILS_BN=68 # বড় করা হলো
           BASE_KANZUL=42
           BASE_BN=52
           BASE_AR=80
@@ -88,20 +87,19 @@ jobs:
           AYAT_Y=SURA_Y + int(BASE_SURA*SCALE*1.6)
           LINE_Y=AYAT_Y + int(BASE_SURA*SCALE*1.6)
 
-          # === FIX: নাম দুটো এখন উপরে-নিচে (line break) ===
+          # === FIX: বড় ফন্ট + center align + উপরে-নিচে ===
           SIDE_MARGIN=int(30*SCALE)
           AVAIL_W_NAMES = LEFT_W - 2*SIDE_MARGIN
-          DETAILS_FLOOR=22
-          GAP_Y_DETAILS=int(18*SCALE)
+          DETAILS_FLOOR=32 # আগে 22 ছিল, এখন বড় রাখা হলো
+          GAP_Y_DETAILS=int(22*SCALE)
 
           _dummy_draw=ImageDraw.Draw(Image.new("RGB",(10,10)))
-          temp_DET=52
+          temp_DET=72 # আগে 52 ছিল, এখন 72 থেকে শুরু
           while True:
               f_ar_det=get_font_by_size(True, temp_DET*SCALE)
               f_bn_det=get_font_by_size(False, temp_DET*SCALE)
               AR_NAME_W=_dummy_draw.textlength(AR_NAME, font=f_ar_det)
               BN_NAME_W=_dummy_draw.textlength(BN_NAME, font=f_bn_det)
-              # এখন max width চেক, যোগফল না
               if max(AR_NAME_W, BN_NAME_W) <= AVAIL_W_NAMES or temp_DET <= DETAILS_FLOOR:
                   BASE_DETAILS_AR=temp_DET
                   BASE_DETAILS_BN=temp_DET
@@ -110,8 +108,7 @@ jobs:
 
           print(f"AVAIL_W_NAMES={AVAIL_W_NAMES}, final details font={BASE_DETAILS_AR}dp, AR_NAME_W={AR_NAME_W}, BN_NAME_W={BN_NAME_W}")
 
-          NAMES_START_X = SIDE_MARGIN
-          NAMES_Y = LINE_Y + int(50*SCALE)
+          NAMES_Y = LINE_Y + int(55*SCALE)
 
           def draw_label_colon(draw, x, y, label, value, font, fill):
               draw.text((x, y), label, font=font, fill=fill)
@@ -198,18 +195,21 @@ jobs:
               min_top = int(120*SCALE)
               start_y = max(min_top, (H - total_block_h) // 2)
 
-              # Sura / Ayat - কোলন align
               draw_label_colon(draw, int(40*SCALE), SURA_Y, "সূরা", sura_disp, f_sura, (0,0,0))
               draw_label_colon(draw, int(40*SCALE), AYAT_Y, "আয়াত", ayat_disp, f_sura, (0,0,0))
               draw.line([(int(40*SCALE), LINE_Y), (int(LEFT_W-40*SCALE), LINE_Y)], fill=(100,100,120), width=2)
 
-              # DETAILS - এখন উপরে আরবি, নিচে বাংলা (0°, line break)
+              # DETAILS - center aligned, উপরে আরবি নিচে বাংলা
               f_ar_det=get_font_by_size(True, BASE_DETAILS_AR*SCALE)
               f_bn_det=get_font_by_size(False, BASE_DETAILS_BN*SCALE)
+              ar_w = draw.textlength(AR_NAME, font=f_ar_det)
+              bn_w = draw.textlength(BN_NAME, font=f_bn_det)
+              ar_x = (LEFT_W - ar_w)//2
+              bn_x = (LEFT_W - bn_w)//2
               dy = NAMES_Y
-              draw.text((NAMES_START_X, dy), AR_NAME, font=f_ar_det, fill=(20,20,60))
-              dy += int(BASE_DETAILS_AR*SCALE*1.5) + GAP_Y_DETAILS
-              draw.text((NAMES_START_X, dy), BN_NAME, font=f_bn_det, fill=(20,20,60))
+              draw.text((ar_x, dy), AR_NAME, font=f_ar_det, fill=(20,20,60))
+              dy += int(BASE_DETAILS_AR*SCALE*1.6) + GAP_Y_DETAILS
+              draw.text((bn_x, dy), BN_NAME, font=f_bn_det, fill=(20,20,60))
 
               y=start_y
               for line in arabic_lines:
@@ -218,7 +218,6 @@ jobs:
                   y+=int(BASE_AR*SCALE*1.5)
 
               y+=int(50*SCALE)
-              # === FIX: অনুবাদ: এর কোলনটা সূরা/আয়াতের মত হবে ===
               draw_label_colon(draw, LEFT_W+int(50*SCALE), y, "কানযুল ঈমান থেকে অনুবাদ", "", f_kanzul, (20,40,120))
               y+=int(75*SCALE)
 
@@ -245,10 +244,17 @@ jobs:
 
           PY
 
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ayah-images
+          path: output/
+          retention-days: 7
+
       - name: Push output
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -f output/
-          git commit -m "fix: onubad colon alignment + arabic/bangla sura name stacked vertically" || echo "no changes"
+          git commit -m "font bigger + center + artifact upload" || echo "no changes"
           git push
