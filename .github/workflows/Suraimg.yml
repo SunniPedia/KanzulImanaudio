@@ -29,7 +29,7 @@ jobs:
           FONT_BN="src/solaimanlipi.ttf"
           FONT_AR="src/noorehuda.ttf"
 
-          # পুরানো output ডিলিট - যাতে নতুন ছবি ১০০% বানায়
+          # পুরানো output ডিলিট - যাতে নতুন ছবি ১০০% বানায়
           if os.path.exists(OUT):
               shutil.rmtree(OUT)
           os.makedirs(OUT, exist_ok=True)
@@ -94,12 +94,12 @@ jobs:
                       bg.paste(logo,(int((LEFT_W-ls)//2), int(30*SCALE)), logo)
                   except: pass
 
-              # === তোমার চাওয়া মতো 22dp ===
-              BASE_SURA=22
-              BASE_DETAILS_AR=22
-              BASE_DETAILS_BN=22
+              # === ফন্ট সাইজ (dp) — সূরা/আয়াত ও details এখন 40dp ===
+              BASE_SURA=40
+              BASE_DETAILS_AR=40
+              BASE_DETAILS_BN=40
               BASE_KANZUL=42
-              BASE_BN=52 # বাংলা বড়, যাতে কাটার আগে শ্রিঙ্ক হয়
+              BASE_BN=52 # বাংলা বড়, যাতে কাটার আগে শ্রিঙ্ক হয়
               BASE_AR=62
 
               f_sura=get_font(False, BASE_SURA)
@@ -135,7 +135,7 @@ jobs:
                           if cur: bn_lines.append(cur)
                           cur=w
                   if cur: bn_lines.append(cur)
-                  needed = int(350*SCALE) + len(arabic_lines)*int(BASE_AR*SCALE*1.5) + 120*SCALE + len(bn_lines)*int(temp_BN*SCALE*1.45)
+                  needed = len(arabic_lines)*int(BASE_AR*SCALE*1.5) + int(50*SCALE) + int(75*SCALE) + len(bn_lines)*int(temp_BN*SCALE*1.45)
                   if needed < H - 80*SCALE or temp_BN <= 30:
                       BASE_BN = temp_BN
                       break
@@ -143,12 +143,27 @@ jobs:
 
               f_bn=get_font(False, BASE_BN)
 
-              # Sura Ayat 22dp
-              draw.text((int(40*SCALE), int(320*SCALE)), f"সূরা: {sura_disp}", font=f_sura, fill=(0,0,0))
-              draw.text((int(40*SCALE), int(370*SCALE)), f"আয়াত: {ayat_disp}", font=f_sura, fill=(0,0,0))
-              draw.line([(int(40*SCALE), int(430*SCALE)), (int(LEFT_W-40*SCALE), int(430*SCALE))], fill=(100,100,120), width=2)
+              # === Main content (Arabic ayah + heading + Bangla translation) ব্লকের total height ===
+              arabic_block_h = len(arabic_lines) * int(BASE_AR*SCALE*1.5)
+              gap_after_arabic = int(50*SCALE)
+              kanzul_block_h = int(75*SCALE)
+              bn_block_h = len(bn_lines) * int(BASE_BN*SCALE*1.4)
+              total_block_h = arabic_block_h + gap_after_arabic + kanzul_block_h + bn_block_h
 
-              # DETAILS - 90° Arabic উপরে, Bangla নিচে - 22dp সব ছবিতে
+              # ডান পাশের পুরো height (0..H) এর মাঝখানে content বসানো, একটা ন্যূনতম উপরের মার্জিন রেখে
+              min_top = int(120*SCALE)
+              start_y = max(min_top, (H - total_block_h) // 2)
+
+              # Sura / Ayat — 40dp ফন্ট অনুযায়ী স্পেসিং adjust করা হয়েছে যাতে overlap না হয়
+              sura_y = int(300*SCALE)
+              ayat_y = sura_y + int(BASE_SURA*SCALE*1.6)
+              line_y = ayat_y + int(BASE_SURA*SCALE*1.6)
+
+              draw.text((int(40*SCALE), sura_y), f"সূরা: {sura_disp}", font=f_sura, fill=(0,0,0))
+              draw.text((int(40*SCALE), ayat_y), f"আয়াত: {ayat_disp}", font=f_sura, fill=(0,0,0))
+              draw.line([(int(40*SCALE), line_y), (int(LEFT_W-40*SCALE), line_y)], fill=(100,100,120), width=2)
+
+              # DETAILS - 90° Arabic উপরে, Bangla নিচে - 40dp, height ফন্ট সাইজ অনুযায়ী dynamic
               info=details_map.get(f"{s_no:03d}", details_map.get("001"))
               if info:
                   ar_txt=info.get('ar','')
@@ -156,22 +171,27 @@ jobs:
                   f_ar_det=get_font_by_size(True, BASE_DETAILS_AR*SCALE)
                   f_bn_det=get_font_by_size(False, BASE_DETAILS_BN*SCALE)
 
+                  det_ar_h=int(BASE_DETAILS_AR*SCALE*2.0)
+                  det_bn_h=int(BASE_DETAILS_BN*SCALE*2.0)
+
                   ar_w=int(draw.textlength(ar_txt, font=f_ar_det)+100*SCALE)
-                  tmp_ar=Image.new("RGBA",(ar_w, int(90*SCALE)), (0,0,0,0))
-                  ImageDraw.Draw(tmp_ar).text((0,15), ar_txt, font=f_ar_det, fill=(20,20,60,255))
+                  tmp_ar=Image.new("RGBA",(ar_w, det_ar_h), (0,0,0,0))
+                  ImageDraw.Draw(tmp_ar).text((0,int(det_ar_h*0.18)), ar_txt, font=f_ar_det, fill=(20,20,60,255))
                   rot_ar=tmp_ar.rotate(90, expand=True)
 
                   bn_w=int(draw.textlength(bn_txt, font=f_bn_det)+100*SCALE)
-                  tmp_bn=Image.new("RGBA",(bn_w, int(90*SCALE)), (0,0,0,0))
-                  ImageDraw.Draw(tmp_bn).text((0,15), bn_txt, font=f_bn_det, fill=(20,20,60,255))
+                  tmp_bn=Image.new("RGBA",(bn_w, det_bn_h), (0,0,0,0))
+                  ImageDraw.Draw(tmp_bn).text((0,int(det_bn_h*0.18)), bn_txt, font=f_bn_det, fill=(20,20,60,255))
                   rot_bn=tmp_bn.rotate(90, expand=True)
 
-                  ry=int(480*SCALE)
-                  bg.paste(rot_ar, (int((LEFT_W-rot_ar.width)//2), ry), rot_ar)
+                  ry=line_y+int(50*SCALE)
+                  ax=max(0, (LEFT_W-rot_ar.width)//2)
+                  bg.paste(rot_ar, (int(ax), ry), rot_ar)
                   ry+=rot_ar.height+int(30*SCALE)
-                  bg.paste(rot_bn, (int((LEFT_W-rot_bn.width)//2), ry), rot_bn)
+                  bx=max(0, (LEFT_W-rot_bn.width)//2)
+                  bg.paste(rot_bn, (int(bx), ry), rot_bn)
 
-              y=int(350*SCALE)
+              y=start_y
               for line in arabic_lines:
                   w=draw.textlength(line, font=f_ar)
                   draw.text((W-int(70*SCALE)-w, y), line, font=f_ar, fill=(0,0,0))
@@ -200,7 +220,7 @@ jobs:
                   y+=int(BASE_BN*SCALE*1.4)
 
               bg.save(os.path.join(OUT, filename), "JPEG", quality=95, subsampling=0)
-              print(f"Done {filename} with BN {BASE_BN}dp")
+              print(f"Done {filename} with BN {BASE_BN}dp, start_y={start_y}")
 
           PY
 
@@ -209,5 +229,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -f output/
-          git commit -m "force rebuild all images - fix cut and details 22dp" || echo "no changes"
+          git commit -m "center main content, sura/ayat & details fonts 40dp" || echo "no changes"
           git push
