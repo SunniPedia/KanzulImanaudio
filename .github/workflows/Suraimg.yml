@@ -72,6 +72,26 @@ jobs:
           with open(DATA, encoding="utf-8") as f:
               data=json.load(f)
 
+          # === ফন্ট সাইজ (dp) ===
+          BASE_SURA=48              # সূরা/আয়াত (আরও বড় করা হলো)
+          BASE_DETAILS_AR=52        # details.txt আরবি (Image 2 এর মতো বড়)
+          BASE_DETAILS_BN=52        # details.txt বাংলা (Image 2 এর মতো বড়)
+          BASE_KANZUL=42
+          BASE_BN=52                # বাংলা অনুবাদ - auto shrink হবে
+          BASE_AR=80                # আরবি আয়াত - auto shrink হবে
+
+          f_ar_det=get_font_by_size(True, BASE_DETAILS_AR*SCALE)
+          f_bn_det=get_font_by_size(False, BASE_DETAILS_BN*SCALE)
+
+          # === সব সূরার details.txt এন্ট্রি স্কেন করে সবচেয়ে বড় নামের জন্য যত জায়গা লাগে
+          #     সেটাকেই ফিক্সড "স্লট" সাইজ ধরা হচ্ছে - তাই প্রতিটা ছবিতে বক্সের সাইজ/পজিশন সমান থাকবে
+          _dummy_draw=ImageDraw.Draw(Image.new("RGB",(10,10)))
+          _ar_widths=[_dummy_draw.textlength(v.get('ar',''), font=f_ar_det) for v in details_map.values()]
+          _bn_widths=[_dummy_draw.textlength(v.get('bn',''), font=f_bn_det) for v in details_map.values()]
+          AR_SLOT_H=int((max(_ar_widths) if _ar_widths else 0) + 60*SCALE)
+          BN_SLOT_H=int((max(_bn_widths) if _bn_widths else 0) + 60*SCALE)
+          print(f"AR_SLOT_H={AR_SLOT_H}, BN_SLOT_H={BN_SLOT_H}")
+
           for item in data:
               sura_int=extract_number(item.get('sura','0'))
               ayat_int=extract_number(item.get('verses','0'))
@@ -94,14 +114,6 @@ jobs:
                       bg.paste(logo,(int((LEFT_W-ls)//2), int(30*SCALE)), logo)
                   except: pass
 
-              # === ফন্ট সাইজ (dp) ===
-              BASE_SURA=40              # সূরা/আয়াত
-              BASE_DETAILS_AR=46        # details.txt আরবি (সূরা/আয়াত থেকে কিছুটা বড়)
-              BASE_DETAILS_BN=46        # details.txt বাংলা (সূরা/আয়াত থেকে কিছুটা বড়)
-              BASE_KANZUL=42
-              BASE_BN=52                # বাংলা অনুবাদ - auto shrink হবে
-              BASE_AR=80                # আরবি আয়াত - auto shrink হবে (আগের চেয়ে বড়)
-
               f_sura=get_font(False, BASE_SURA)
               f_kanzul=get_font(False, BASE_KANZUL)
               max_w=W-LEFT_W-int(140*SCALE)
@@ -123,7 +135,6 @@ jobs:
                           cur=w
                   if cur: arabic_lines.append(cur)
                   ar_block_h = len(arabic_lines) * int(temp_AR*SCALE*1.5)
-                  # আরবি ব্লক পুরো উচ্চতার অর্ধেকের বেশি নিলে একটু ছোট করা হবে, floor 50dp
                   if ar_block_h <= (H - int(200*SCALE)) * 0.55 or temp_AR <= 50:
                       BASE_AR = temp_AR
                       break
@@ -159,7 +170,6 @@ jobs:
               bn_block_h = len(bn_lines) * int(BASE_BN*SCALE*1.4)
               total_block_h = arabic_block_h + gap_after_arabic + kanzul_block_h + bn_block_h
 
-              # ডান পাশের পুরো height (0..H) এর মাঝখানে content বসানো, একটা ন্যূনতম উপরের মার্জিন রেখে
               min_top = int(120*SCALE)
               start_y = max(min_top, (H - total_block_h) // 2)
 
@@ -172,31 +182,33 @@ jobs:
               draw.text((int(40*SCALE), ayat_y), f"আয়াত: {ayat_disp}", font=f_sura, fill=(0,0,0))
               draw.line([(int(40*SCALE), line_y), (int(LEFT_W-40*SCALE), line_y)], fill=(100,100,120), width=2)
 
-              # DETAILS - উপরে ৯০° আরবি সূরার নাম, নিচে ৯০° বাংলা সূরার নাম - 46dp
+              # DETAILS - উপরে ৯০° আরবি সূরার নাম, নিচে ৯০° বাংলা সূরার নাম
+              # প্রতিটা নাম তার নিজের ফিক্সড স্লটের (AR_SLOT_H / BN_SLOT_H) মাঝখানে বসছে,
+              # তাই নামের length যা-ই হোক, বক্সের সাইজ/পজিশন সব ছবিতে সমান থাকবে
               info=details_map.get(f"{s_no:03d}", details_map.get("001"))
               if info:
                   ar_txt=info.get('ar','')
                   bn_txt=info.get('bn','')
-                  f_ar_det=get_font_by_size(True, BASE_DETAILS_AR*SCALE)
-                  f_bn_det=get_font_by_size(False, BASE_DETAILS_BN*SCALE)
 
                   det_ar_h=int(BASE_DETAILS_AR*SCALE*2.2)
                   det_bn_h=int(BASE_DETAILS_BN*SCALE*2.2)
 
-                  ar_w=int(draw.textlength(ar_txt, font=f_ar_det)+100*SCALE)
-                  tmp_ar=Image.new("RGBA",(ar_w, det_ar_h), (0,0,0,0))
-                  ImageDraw.Draw(tmp_ar).text((0,int(det_ar_h*0.15)), ar_txt, font=f_ar_det, fill=(20,20,60,255))
-                  rot_ar=tmp_ar.rotate(90, expand=True)   # ৯০° আরবি সূরার নাম (উপরে)
+                  tmp_ar=Image.new("RGBA",(AR_SLOT_H, det_ar_h), (0,0,0,0))
+                  ar_tw=draw.textlength(ar_txt, font=f_ar_det)
+                  ar_tx=max(0, int((AR_SLOT_H-ar_tw)//2))
+                  ImageDraw.Draw(tmp_ar).text((ar_tx,int(det_ar_h*0.15)), ar_txt, font=f_ar_det, fill=(20,20,60,255))
+                  rot_ar=tmp_ar.rotate(90, expand=True)   # rot_ar.height == AR_SLOT_H (ফিক্সড)
 
-                  bn_w=int(draw.textlength(bn_txt, font=f_bn_det)+100*SCALE)
-                  tmp_bn=Image.new("RGBA",(bn_w, det_bn_h), (0,0,0,0))
-                  ImageDraw.Draw(tmp_bn).text((0,int(det_bn_h*0.15)), bn_txt, font=f_bn_det, fill=(20,20,60,255))
-                  rot_bn=tmp_bn.rotate(90, expand=True)   # ৯০° বাংলা সূরার নাম (নিচে)
+                  tmp_bn=Image.new("RGBA",(BN_SLOT_H, det_bn_h), (0,0,0,0))
+                  bn_tw=draw.textlength(bn_txt, font=f_bn_det)
+                  bn_tx=max(0, int((BN_SLOT_H-bn_tw)//2))
+                  ImageDraw.Draw(tmp_bn).text((bn_tx,int(det_bn_h*0.15)), bn_txt, font=f_bn_det, fill=(20,20,60,255))
+                  rot_bn=tmp_bn.rotate(90, expand=True)   # rot_bn.height == BN_SLOT_H (ফিক্সড)
 
                   ry=line_y+int(50*SCALE)
                   ax=max(0, (LEFT_W-rot_ar.width)//2)
                   bg.paste(rot_ar, (int(ax), ry), rot_ar)
-                  ry+=rot_ar.height+int(40*SCALE)
+                  ry+=AR_SLOT_H+int(40*SCALE)   # ফিক্সড গ্যাপ - সব ছবিতে সমান
                   bx=max(0, (LEFT_W-rot_bn.width)//2)
                   bg.paste(rot_bn, (int(bx), ry), rot_bn)
 
@@ -238,5 +250,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -f output/
-          git commit -m "bigger auto-shrinking Arabic ayah font, larger details.txt font 46dp" || echo "no changes"
+          git commit -m "fixed-slot consistent details.txt sizing, bigger sura/ayat font" || echo "no changes"
           git push
