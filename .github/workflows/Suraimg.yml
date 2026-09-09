@@ -1,0 +1,181 @@
+name: Generate Ayah Images - Max Resolution
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fonts-noto fonts-noto-core
+          pip install Pillow
+
+      - name: Generate Images - 4K Max Resolution
+        run: |
+          python3 << 'PY'
+          from PIL import Image, ImageDraw, ImageFont
+          import json, os
+
+          BG = "src/background.jpg"
+          LOGO = "src/logo.jpg"
+          DATA = "src/data.json"
+          DETAILS = "src/details.txt"
+          OUT = "output"
+
+          # English to Bangla number converter
+          EN_TO_BN = str.maketrans("0123456789", "০১২৩৪৫৬৭৮৯")
+          def to_bangla_num(s):
+              return str(s).translate(EN_TO_BN)
+
+          # --- MAX RESOLUTION LOGIC ---
+          # If you provide a 4K/8K background.jpg, output will be same size
+          # If no background, default to 3840x2160 (4K). Change to 7680x4320 for 8K
+          DEFAULT_W, DEFAULT_H = 3840, 2160 # 4K UHD
+          # DEFAULT_W, DEFAULT_H = 7680, 4320 # Uncomment for 8K UHD
+
+          if os.path.exists(BG):
+              with Image.open(BG) as im:
+                  W, H = im.size
+                  print(f"Background found with max resolution: {W}x{H}")
+          else:
+              W, H = DEFAULT_W, DEFAULT_H
+              print(f"No background, using default max resolution: {W}x{H}")
+
+          LEFT_W = int(W * 0.18) # 18% left panel
+          SCALE = W / 1280 # scale factor for fonts based on 1280 base
+
+          def get_font(base_size):
+              size = int(base_size * SCALE)
+              paths = [
+                  "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Regular.ttf",
+                  "/usr/share/fonts/truetype/noto/NotoSerifBengali-Regular.ttf",
+                  "/usr/share/fonts/truetype/noto/NotoSansBengali-Regular.ttf",
+              ]
+              for p in paths:
+                  if os.path.exists(p):
+                      try: return ImageFont.truetype(p, size)
+                      except: pass
+              return ImageFont.load_default()
+
+          def load_details():
+              d = {}
+              if not os.path.exists(DETAILS): return d
+              with open(DETAILS, encoding="utf-8") as f:
+                  for line in f:
+                      if not line.strip(): continue
+                      parts = line.strip().split("|")
+                      if len(parts) >= 3:
+                          d[parts[0].zfill(2)] = {"ar": parts[1], "bn": parts[2]}
+              return d
+
+          def wrap(draw, text, font, max_w):
+              lines = []
+              for para in text.split("\n"):
+                  cur = ""
+                  for w in para.split():
+                      test = f"{cur} {w}".strip()
+                      if draw.textlength(test, font=font) <= max_w:
+                          cur = test
+                      else:
+                          if cur: lines.append(cur)
+                          cur = w
+                  if cur: lines.append(cur)
+              return lines
+
+          os.makedirs(OUT, exist_ok=True)
+          details_map = load_details()
+
+          with open(DATA, encoding="utf-8") as f:
+              data = json.load(f)
+
+          for item in data:
+              # Background - keep max res
+              if os.path.exists(BG):
+                  bg = Image.open(BG).convert("RGB")
+                  if bg.size!= (W,H):
+                      bg = bg.resize((W,H), Image.LANCZOS)
+              else:
+                  bg = Image.new("RGB",(W,H),(235,238,245))
+
+              draw = ImageDraw.Draw(bg)
+
+              # Left panel + border - scaled
+              draw.rectangle([0,0,LEFT_W,H], fill=(214,218,228))
+              draw.line([(LEFT_W,0),(LEFT_W,H)], fill=(35,45,85), width=int(3*SCALE))
+
+              # Logo - scaled
+              if os.path.exists(LOGO):
+                  logo_size = int(160 * SCALE)
+                  logo = Image.open(LOGO).convert("RGBA").resize((logo_size, logo_size), Image.LANCZOS)
+                  bg.paste(logo, (int(35*SCALE), int(20*SCALE)), logo)
+
+              f_bn_s = get_font(32)
+              f_bn_m = get_font(28)
+              f_bn_l = get_font(32)
+              f_ar_l = get_font(48)
+
+              sura_en = str(item.get('sura','')).strip()
+              verses_en = str(item.get('verses','')).strip()
+              sura_bn = to_bangla_num(sura_en)
+              verses_bn = to_bangla_num(verses_en)
+              s_no_en = str(item.get('sura_no_en', sura_en)).zfill(2)
+
+              # Positions scaled
+              draw.text((int(40*SCALE), int(210*SCALE)), f"সূরা: {sura_bn}", font=f_bn_s, fill=(0,0,0))
+              draw.text((int(40*SCALE), int(260*SCALE)), f"আয়াত: {verses_bn}", font=f_bn_s, fill=(0,0,0))
+              draw.line([(int(40*SCALE), int(320*SCALE)), (int(180*SCALE), int(320*SCALE))], fill=(100,100,120), width=int(1*SCALE))
+
+              # details.txt - ঘুরানো
+              info = details_map.get(s_no_en, {})
+              if info:
+                  txt = f"{info.get('bn','')} - {info.get('ar','')}"
+                  tmp = Image.new("RGBA", (int(700*SCALE), int(60*SCALE)), (0,0,0,0))
+                  tmp_d = ImageDraw.Draw(tmp)
+                  tmp_d.text((0,0), txt, font=f_bn_s, fill=(0,0,0))
+                  rotated = tmp.rotate(90, expand=True)
+                  bg.paste(rotated, (int(25*SCALE), int(340*SCALE)), rotated)
+
+              # Arabic Ayat
+              y = int(50*SCALE)
+              for line in item.get('names','').split("\n"):
+                  w = draw.textlength(line, font=f_ar_l)
+                  draw.text((W - int(50*SCALE) - w, y), line, font=f_ar_l, fill=(0,0,0))
+                  y+=int(70*SCALE)
+
+              y+=int(30*SCALE)
+              draw.text((LEFT_W+int(30*SCALE), y), "কানযুল ঈমান থেকে অনুবাদ:", font=f_bn_m, fill=(20,40,120))
+              y+=int(50*SCALE)
+
+              for line in wrap(draw, item.get('name',''), f_bn_l, W-LEFT_W-int(80*SCALE)):
+                  draw.text((LEFT_W+int(30*SCALE), y), line, font=f_bn_l, fill=(15,25,85))
+                  y+=int(48*SCALE)
+
+              out_name = f"sura_{s_no_en}_ayat_{verses_en}.jpg"
+              out_path = os.path.join(OUT, out_name)
+              # Save with max quality + 300 DPI
+              bg.save(out_path, "JPEG", quality=100, dpi=(300,300), subsampling=0)
+              print(f"Generated {out_name} [{W}x{H}]")
+
+          PY
+
+      - name: Push output
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add output/
+          git diff --staged --quiet || git commit -m "auto: generate max-res ayah images"
+          git push
