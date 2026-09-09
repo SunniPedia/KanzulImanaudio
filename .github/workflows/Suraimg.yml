@@ -201,13 +201,15 @@ jobs:
               draw.text((int(40*SCALE), ayat_y), f"আয়াত: {ayat_disp}", font=f_sura, fill=(0,0,0))
               draw.line([(int(40*SCALE), line_y), (int(LEFT_W-40*SCALE), line_y)], fill=(100,100,120), width=2)
 
-              # DETAILS - উপরে ৯০° আরবি সূরার নাম, নিচে ৯০° বাংলা সূরার নাম
+              # DETAILS - বাম পাশে ৯০° আরবি সূরার নাম, তার পাশে ৯০° বাংলা সূরার নাম (side-by-side)
               # (workflow_dispatch input থেকে আসা নাম, প্রতিটা ছবিতে একই বক্সে বসছে)
+              gap_x=int(30*SCALE)
+              total_w=ROT_AR.width+gap_x+ROT_BN.width
+              start_x=max(0, (LEFT_W-total_w)//2)
               ry=line_y+int(50*SCALE)
-              ax=max(0, (LEFT_W-ROT_AR.width)//2)
+              ax=start_x
               bg.paste(ROT_AR, (int(ax), ry), ROT_AR)
-              ry+=AR_SLOT_H+int(40*SCALE)   # ফিক্সড গ্যাপ - সব ছবিতে সমান
-              bx=max(0, (LEFT_W-ROT_BN.width)//2)
+              bx=ax+ROT_AR.width+gap_x
               bg.paste(ROT_BN, (int(bx), ry), ROT_BN)
 
               y=start_y
