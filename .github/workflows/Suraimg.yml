@@ -94,31 +94,40 @@ jobs:
                       bg.paste(logo,(int((LEFT_W-ls)//2), int(30*SCALE)), logo)
                   except: pass
 
-              # === ফন্ট সাইজ (dp) — সূরা/আয়াত ও details এখন 40dp ===
-              BASE_SURA=40
-              BASE_DETAILS_AR=40
-              BASE_DETAILS_BN=40
+              # === ফন্ট সাইজ (dp) ===
+              BASE_SURA=40              # সূরা/আয়াত
+              BASE_DETAILS_AR=46        # details.txt আরবি (সূরা/আয়াত থেকে কিছুটা বড়)
+              BASE_DETAILS_BN=46        # details.txt বাংলা (সূরা/আয়াত থেকে কিছুটা বড়)
               BASE_KANZUL=42
-              BASE_BN=52 # বাংলা বড়, যাতে কাটার আগে শ্রিঙ্ক হয়
-              BASE_AR=62
+              BASE_BN=52                # বাংলা অনুবাদ - auto shrink হবে
+              BASE_AR=80                # আরবি আয়াত - auto shrink হবে (আগের চেয়ে বড়)
 
               f_sura=get_font(False, BASE_SURA)
               f_kanzul=get_font(False, BASE_KANZUL)
               max_w=W-LEFT_W-int(140*SCALE)
 
-              # Arabic
-              f_ar=get_font(True, BASE_AR)
-              arabic_raw=item.get('names','').strip()
-              arabic_lines=[]
-              cur=""
-              for w in arabic_raw.split():
-                  test=f"{cur} {w}".strip()
-                  if draw.textlength(test, font=f_ar) <= max_w:
-                      cur=test
-                  else:
-                      if cur: arabic_lines.append(cur)
-                      cur=w
-              if cur: arabic_lines.append(cur)
+              # Arabic ayah - auto shrink যাতে টেক্সট লম্বা হলে ব্লকটা ছবির বাইরে না যায়,
+              # কিন্তু ছোট আয়াতে বড় (80dp) ফন্টই বজায় থাকে
+              temp_AR = BASE_AR
+              while True:
+                  f_ar=get_font(True, temp_AR)
+                  arabic_raw=item.get('names','').strip()
+                  arabic_lines=[]
+                  cur=""
+                  for w in arabic_raw.split():
+                      test=f"{cur} {w}".strip()
+                      if draw.textlength(test, font=f_ar) <= max_w:
+                          cur=test
+                      else:
+                          if cur: arabic_lines.append(cur)
+                          cur=w
+                  if cur: arabic_lines.append(cur)
+                  ar_block_h = len(arabic_lines) * int(temp_AR*SCALE*1.5)
+                  # আরবি ব্লক পুরো উচ্চতার অর্ধেকের বেশি নিলে একটু ছোট করা হবে, floor 50dp
+                  if ar_block_h <= (H - int(200*SCALE)) * 0.55 or temp_AR <= 50:
+                      BASE_AR = temp_AR
+                      break
+                  temp_AR -= 2
 
               # Bangla - auto shrink যাতে না কাটে
               temp_BN = BASE_BN
@@ -154,7 +163,7 @@ jobs:
               min_top = int(120*SCALE)
               start_y = max(min_top, (H - total_block_h) // 2)
 
-              # Sura / Ayat — 40dp ফন্ট অনুযায়ী স্পেসিং adjust করা হয়েছে যাতে overlap না হয়
+              # Sura / Ayat
               sura_y = int(300*SCALE)
               ayat_y = sura_y + int(BASE_SURA*SCALE*1.6)
               line_y = ayat_y + int(BASE_SURA*SCALE*1.6)
@@ -163,7 +172,7 @@ jobs:
               draw.text((int(40*SCALE), ayat_y), f"আয়াত: {ayat_disp}", font=f_sura, fill=(0,0,0))
               draw.line([(int(40*SCALE), line_y), (int(LEFT_W-40*SCALE), line_y)], fill=(100,100,120), width=2)
 
-              # DETAILS - 90° Arabic উপরে, Bangla নিচে - 40dp, height ফন্ট সাইজ অনুযায়ী dynamic
+              # DETAILS - উপরে ৯০° আরবি সূরার নাম, নিচে ৯০° বাংলা সূরার নাম - 46dp
               info=details_map.get(f"{s_no:03d}", details_map.get("001"))
               if info:
                   ar_txt=info.get('ar','')
@@ -171,23 +180,23 @@ jobs:
                   f_ar_det=get_font_by_size(True, BASE_DETAILS_AR*SCALE)
                   f_bn_det=get_font_by_size(False, BASE_DETAILS_BN*SCALE)
 
-                  det_ar_h=int(BASE_DETAILS_AR*SCALE*2.0)
-                  det_bn_h=int(BASE_DETAILS_BN*SCALE*2.0)
+                  det_ar_h=int(BASE_DETAILS_AR*SCALE*2.2)
+                  det_bn_h=int(BASE_DETAILS_BN*SCALE*2.2)
 
                   ar_w=int(draw.textlength(ar_txt, font=f_ar_det)+100*SCALE)
                   tmp_ar=Image.new("RGBA",(ar_w, det_ar_h), (0,0,0,0))
-                  ImageDraw.Draw(tmp_ar).text((0,int(det_ar_h*0.18)), ar_txt, font=f_ar_det, fill=(20,20,60,255))
-                  rot_ar=tmp_ar.rotate(90, expand=True)
+                  ImageDraw.Draw(tmp_ar).text((0,int(det_ar_h*0.15)), ar_txt, font=f_ar_det, fill=(20,20,60,255))
+                  rot_ar=tmp_ar.rotate(90, expand=True)   # ৯০° আরবি সূরার নাম (উপরে)
 
                   bn_w=int(draw.textlength(bn_txt, font=f_bn_det)+100*SCALE)
                   tmp_bn=Image.new("RGBA",(bn_w, det_bn_h), (0,0,0,0))
-                  ImageDraw.Draw(tmp_bn).text((0,int(det_bn_h*0.18)), bn_txt, font=f_bn_det, fill=(20,20,60,255))
-                  rot_bn=tmp_bn.rotate(90, expand=True)
+                  ImageDraw.Draw(tmp_bn).text((0,int(det_bn_h*0.15)), bn_txt, font=f_bn_det, fill=(20,20,60,255))
+                  rot_bn=tmp_bn.rotate(90, expand=True)   # ৯০° বাংলা সূরার নাম (নিচে)
 
                   ry=line_y+int(50*SCALE)
                   ax=max(0, (LEFT_W-rot_ar.width)//2)
                   bg.paste(rot_ar, (int(ax), ry), rot_ar)
-                  ry+=rot_ar.height+int(30*SCALE)
+                  ry+=rot_ar.height+int(40*SCALE)
                   bx=max(0, (LEFT_W-rot_bn.width)//2)
                   bg.paste(rot_bn, (int(bx), ry), rot_bn)
 
@@ -220,7 +229,7 @@ jobs:
                   y+=int(BASE_BN*SCALE*1.4)
 
               bg.save(os.path.join(OUT, filename), "JPEG", quality=95, subsampling=0)
-              print(f"Done {filename} with BN {BASE_BN}dp, start_y={start_y}")
+              print(f"Done {filename} with AR {BASE_AR}dp, BN {BASE_BN}dp, start_y={start_y}")
 
           PY
 
@@ -229,5 +238,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -f output/
-          git commit -m "center main content, sura/ayat & details fonts 40dp" || echo "no changes"
+          git commit -m "bigger auto-shrinking Arabic ayah font, larger details.txt font 46dp" || echo "no changes"
           git push
