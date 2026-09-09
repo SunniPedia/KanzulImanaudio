@@ -1,4 +1,4 @@
-name: Generate Ayah Images - Max Resolution
+name: Generate Ayah Images - 001001 Format
 
 on:
   push:
@@ -12,170 +12,144 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+      - run: pip install Pillow
 
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y fonts-noto fonts-noto-core
-          pip install Pillow
-
-      - name: Generate Images - 4K Max Resolution
+      - name: Generate
         run: |
           python3 << 'PY'
           from PIL import Image, ImageDraw, ImageFont
-          import json, os
+          import json, os, re
 
-          BG = "src/background.jpg"
-          LOGO = "src/logo.jpg"
-          DATA = "src/data.json"
-          DETAILS = "src/details.txt"
-          OUT = "output"
+          BG="src/background.jpg"; LOGO="src/logo.jpg"; DATA="src/data.json"; DETAILS="src/details.txt"; OUT="output"
+          FONT_BN="src/solaimanlipi.ttf"; FONT_AR="src/noorehuda.ttf"
 
-          # English to Bangla number converter
-          EN_TO_BN = str.maketrans("0123456789", "০১২৩৪৫৬৭৮৯")
-          def to_bangla_num(s):
-              return str(s).translate(EN_TO_BN)
+          EN_TO_BN=str.maketrans("0123456789","০১২৩৪৫৬৭৮৯")
+          def to_bangla_num(s): return str(s).translate(EN_TO_BN)
+          def extract_number(s):
+              s=str(s).translate(str.maketrans("০১২৩৪৫৬৭৮৯","0123456789"))
+              m=re.search(r'\d+',s)
+              return int(m.group()) if m else 0
 
-          # --- MAX RESOLUTION LOGIC ---
-          # If you provide a 4K/8K background.jpg, output will be same size
-          # If no background, default to 3840x2160 (4K). Change to 7680x4320 for 8K
-          DEFAULT_W, DEFAULT_H = 3840, 2160 # 4K UHD
-          # DEFAULT_W, DEFAULT_H = 7680, 4320 # Uncomment for 8K UHD
+          # Max Res + Glitch Fix
+          W,H=3840,2160
+          bg_img=None
+          try:
+              if os.path.exists(BG):
+                  with Image.open(BG) as im: im.verify()
+                  bg_img=Image.open(BG).convert("RGB")
+                  W,H=bg_img.size
+          except:
+              bg_img=Image.new("RGB",(W,H),(232,236,244))
 
-          if os.path.exists(BG):
-              with Image.open(BG) as im:
-                  W, H = im.size
-                  print(f"Background found with max resolution: {W}x{H}")
-          else:
-              W, H = DEFAULT_W, DEFAULT_H
-              print(f"No background, using default max resolution: {W}x{H}")
+          LEFT_W=int(W*0.18); SCALE=W/1280
 
-          LEFT_W = int(W * 0.18) # 18% left panel
-          SCALE = W / 1280 # scale factor for fonts based on 1280 base
-
-          def get_font(base_size):
-              size = int(base_size * SCALE)
-              paths = [
-                  "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Regular.ttf",
-                  "/usr/share/fonts/truetype/noto/NotoSerifBengali-Regular.ttf",
-                  "/usr/share/fonts/truetype/noto/NotoSansBengali-Regular.ttf",
-              ]
-              for p in paths:
-                  if os.path.exists(p):
-                      try: return ImageFont.truetype(p, size)
-                      except: pass
+          def get_font(is_ar, base):
+              size=int(base*SCALE)
+              custom=FONT_AR if is_ar else FONT_BN
+              if os.path.exists(custom):
+                  try: return ImageFont.truetype(custom, size)
+                  except: pass
               return ImageFont.load_default()
 
           def load_details():
-              d = {}
-              if not os.path.exists(DETAILS): return d
-              with open(DETAILS, encoding="utf-8") as f:
-                  for line in f:
-                      if not line.strip(): continue
-                      parts = line.strip().split("|")
-                      if len(parts) >= 3:
-                          d[parts[0].zfill(2)] = {"ar": parts[1], "bn": parts[2]}
+              d={}
+              if os.path.exists(DETAILS):
+                  with open(DETAILS,encoding="utf-8") as f:
+                      for line in f:
+                          if not line.strip(): continue
+                          p=line.strip().split("|")
+                          if len(p)>=3: d[p[0].strip().zfill(3)]={"ar":p[1].strip(),"bn":p[2].strip()}
               return d
 
-          def wrap(draw, text, font, max_w):
-              lines = []
-              for para in text.split("\n"):
-                  cur = ""
-                  for w in para.split():
-                      test = f"{cur} {w}".strip()
-                      if draw.textlength(test, font=font) <= max_w:
-                          cur = test
-                      else:
-                          if cur: lines.append(cur)
-                          cur = w
-                  if cur: lines.append(cur)
-              return lines
-
-          os.makedirs(OUT, exist_ok=True)
-          details_map = load_details()
-
-          with open(DATA, encoding="utf-8") as f:
-              data = json.load(f)
+          os.makedirs(OUT,exist_ok=True)
+          details_map=load_details()
+          with open(DATA,encoding="utf-8") as f: data=json.load(f)
 
           for item in data:
-              # Background - keep max res
-              if os.path.exists(BG):
-                  bg = Image.open(BG).convert("RGB")
-                  if bg.size!= (W,H):
-                      bg = bg.resize((W,H), Image.LANCZOS)
-              else:
-                  bg = Image.new("RGB",(W,H),(235,238,245))
+              sura_int=extract_number(item.get('sura','0'))
+              ayat_int=extract_number(item.get('verses','0'))
+              s_no_int=extract_number(item.get('sura_no_en',sura_int))
 
-              draw = ImageDraw.Draw(bg)
+              # --- YOUR REQUIRED FILENAME FORMAT ---
+              # 1,1 -> 001001.jpg | 124,1 -> 124001.jpg | 2,270 -> 002270.jpg
+              filename = f"{sura_int:03d}{ayat_int:03d}.jpg"
 
-              # Left panel + border - scaled
-              draw.rectangle([0,0,LEFT_W,H], fill=(214,218,228))
-              draw.line([(LEFT_W,0),(LEFT_W,H)], fill=(35,45,85), width=int(3*SCALE))
+              sura_bn=to_bangla_num(str(sura_int))
+              ayat_bn=to_bangla_num(str(ayat_int))
 
-              # Logo - scaled
+              bg=bg_img.copy() if bg_img.size==(W,H) else bg_img.resize((W,H), Image.LANCZOS)
+              draw=ImageDraw.Draw(bg)
+              draw.rectangle([0,0,LEFT_W,H],fill=(214,218,228))
+              draw.line([(LEFT_W,0),(LEFT_W,H)],fill=(35,45,85),width=int(3*SCALE))
+
               if os.path.exists(LOGO):
-                  logo_size = int(160 * SCALE)
-                  logo = Image.open(LOGO).convert("RGBA").resize((logo_size, logo_size), Image.LANCZOS)
-                  bg.paste(logo, (int(35*SCALE), int(20*SCALE)), logo)
+                  try:
+                      ls=int(160*SCALE)
+                      logo=Image.open(LOGO).convert("RGBA").resize((ls,ls),Image.LANCZOS)
+                      bg.paste(logo,(int(35*SCALE),int(20*SCALE)),logo)
+                  except: pass
 
-              f_bn_s = get_font(32)
-              f_bn_m = get_font(28)
-              f_bn_l = get_font(32)
-              f_ar_l = get_font(48)
+              f_bn_s=get_font(False,32); f_bn_m=get_font(False,28); f_bn_l=get_font(False,34); f_ar_l=get_font(True,52)
 
-              sura_en = str(item.get('sura','')).strip()
-              verses_en = str(item.get('verses','')).strip()
-              sura_bn = to_bangla_num(sura_en)
-              verses_bn = to_bangla_num(verses_en)
-              s_no_en = str(item.get('sura_no_en', sura_en)).zfill(2)
+              draw.text((int(40*SCALE),int(210*SCALE)),f"সূরা: {sura_bn}",font=f_bn_s,fill=(0,0,0))
+              draw.text((int(40*SCALE),int(260*SCALE)),f"আয়াত: {ayat_bn}",font=f_bn_s,fill=(0,0,0))
+              draw.line([(int(40*SCALE),int(320*SCALE)),(int(180*SCALE),int(320*SCALE))],fill=(100,100,120),width=int(1*SCALE))
 
-              # Positions scaled
-              draw.text((int(40*SCALE), int(210*SCALE)), f"সূরা: {sura_bn}", font=f_bn_s, fill=(0,0,0))
-              draw.text((int(40*SCALE), int(260*SCALE)), f"আয়াত: {verses_bn}", font=f_bn_s, fill=(0,0,0))
-              draw.line([(int(40*SCALE), int(320*SCALE)), (int(180*SCALE), int(320*SCALE))], fill=(100,100,120), width=int(1*SCALE))
-
-              # details.txt - ঘুরানো
-              info = details_map.get(s_no_en, {})
+              info=details_map.get(f"{s_no_int:03d}",{})
               if info:
-                  txt = f"{info.get('bn','')} - {info.get('ar','')}"
-                  tmp = Image.new("RGBA", (int(700*SCALE), int(60*SCALE)), (0,0,0,0))
-                  tmp_d = ImageDraw.Draw(tmp)
-                  tmp_d.text((0,0), txt, font=f_bn_s, fill=(0,0,0))
-                  rotated = tmp.rotate(90, expand=True)
-                  bg.paste(rotated, (int(25*SCALE), int(340*SCALE)), rotated)
+                  txt=f"{info.get('bn','')} - {info.get('ar','')}"
+                  tmp=Image.new("RGBA",(int(700*SCALE),int(60*SCALE)),(0,0,0,0))
+                  ImageDraw.Draw(tmp).text((0,0),txt,font=f_bn_s,fill=(0,0,0))
+                  bg.paste(tmp.rotate(90,expand=True),(int(25*SCALE),int(340*SCALE)),tmp.rotate(90,expand=True))
 
-              # Arabic Ayat
-              y = int(50*SCALE)
+              y=int(50*SCALE)
               for line in item.get('names','').split("\n"):
-                  w = draw.textlength(line, font=f_ar_l)
-                  draw.text((W - int(50*SCALE) - w, y), line, font=f_ar_l, fill=(0,0,0))
-                  y+=int(70*SCALE)
+                  w=draw.textlength(line,font=f_ar_l)
+                  draw.text((W-int(50*SCALE)-w,y),line,font=f_ar_l,fill=(0,0,0))
+                  y+=int(75*SCALE)
 
               y+=int(30*SCALE)
-              draw.text((LEFT_W+int(30*SCALE), y), "কানযুল ঈমান থেকে অনুবাদ:", font=f_bn_m, fill=(20,40,120))
+              draw.text((LEFT_W+int(30*SCALE),y),"কানযুল ঈমান থেকে অনুবাদ:",font=f_bn_m,fill=(20,40,120))
               y+=int(50*SCALE)
 
-              for line in wrap(draw, item.get('name',''), f_bn_l, W-LEFT_W-int(80*SCALE)):
-                  draw.text((LEFT_W+int(30*SCALE), y), line, font=f_bn_l, fill=(15,25,85))
-                  y+=int(48*SCALE)
+              # Justify Bengali
+              trans=item.get('name','')
+              max_w=W-LEFT_W-int(80*SCALE)
+              lines=[]
+              for para in trans.split("\n"):
+                  cur=""
+                  for w in para.split():
+                      test=f"{cur} {w}".strip()
+                      if draw.textlength(test,font=f_bn_l)<=max_w: cur=test
+                      else:
+                          if cur: lines.append(cur)
+                          cur=w
+                  if cur: lines.append(cur)
 
-              out_name = f"sura_{s_no_en}_ayat_{verses_en}.jpg"
-              out_path = os.path.join(OUT, out_name)
-              # Save with max quality + 300 DPI
-              bg.save(out_path, "JPEG", quality=100, dpi=(300,300), subsampling=0)
-              print(f"Generated {out_name} [{W}x{H}]")
+              for i,line in enumerate(lines):
+                  is_last=i==len(lines)-1
+                  if not is_last and len(line.split())>1:
+                      extra=max_w-draw.textlength(line,font=f_bn_l)
+                      se=extra/(len(line.split())-1)
+                      tx=LEFT_W+int(30*SCALE)
+                      for w in line.split():
+                          draw.text((tx,y),w,font=f_bn_l,fill=(15,25,85))
+                          tx+=draw.textlength(w,font=f_bn_l)+draw.textlength(" ",font=f_bn_l)+se
+                  else:
+                      draw.text((LEFT_W+int(30*SCALE),y),line,font=f_bn_l,fill=(15,25,85))
+                  y+=int(50*SCALE)
 
+              bg.save(os.path.join(OUT,filename),"JPEG",quality=100,dpi=(300,300),subsampling=0)
+              print(f"Generated {filename}")
           PY
 
-      - name: Push output
+      - name: Push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add output/
-          git diff --staged --quiet || git commit -m "auto: generate max-res ayah images"
+          git diff --staged --quiet || git commit -m "fix filename 001001.jpg format"
           git push
