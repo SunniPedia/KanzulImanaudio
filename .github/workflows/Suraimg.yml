@@ -87,7 +87,6 @@ jobs:
           AYAT_Y=SURA_Y + int(BASE_SURA*SCALE*1.6)
           LINE_Y=AYAT_Y + int(BASE_SURA*SCALE*1.6)
 
-          # === FIX: Bottom Margin + Center Logic ===
           BOTTOM_MARGIN_DP = 5
           BOTTOM_MARGIN = int(BOTTOM_MARGIN_DP * SCALE)
           TOP_MARGIN = int(120*SCALE)
@@ -110,8 +109,6 @@ jobs:
                   break
               temp_DET -= 2
 
-          print(f"AVAIL_W_NAMES={AVAIL_W_NAMES}, final details font={BASE_DETAILS_AR}dp")
-
           NAMES_Y = LINE_Y + int(55*SCALE)
 
           def draw_label_colon(draw, x, y, label, value, font, fill):
@@ -126,7 +123,6 @@ jobs:
           def draw_centered_label_colon(draw, y, label, value, font, fill):
               label_w = draw.textlength(label, font=font)
               colon_w = draw.textlength(":", font=font)
-              space_w = draw.textlength(" ", font=font)
               value_w = draw.textlength(" "+value, font=font) if value else 0
               total_w = label_w + colon_w + value_w
               start_x = (LEFT_W - total_w) // 2
@@ -213,12 +209,10 @@ jobs:
               if start_y + total_block_h + BOTTOM_MARGIN > H:
                   start_y = H - total_block_h - BOTTOM_MARGIN
 
-              # === CENTERED SURA AYAT ===
               draw_centered_label_colon(draw, SURA_Y, "সূরা", sura_disp, f_sura, (0,0,0))
               draw_centered_label_colon(draw, AYAT_Y, "আয়াত", ayat_disp, f_sura, (0,0,0))
               draw.line([(int(40*SCALE), LINE_Y), (int(LEFT_W-40*SCALE), LINE_Y)], fill=(100,100,120), width=2)
 
-              # DETAILS - center aligned
               f_ar_det=get_font_by_size(True, BASE_DETAILS_AR*SCALE)
               f_bn_det=get_font_by_size(False, BASE_DETAILS_BN*SCALE)
               ar_w = draw.textlength(AR_NAME, font=f_ar_det)
@@ -246,7 +240,7 @@ jobs:
                   if not is_last and len(words)>1:
                       base_w=sum(draw.textlength(w, font=f_bn) for w in words) + draw.textlength(" ", font=f_bn)*(len(words)-1)
                       extra=max_w-base_w
-                      gap=extra/(len(words)-1) if len(words)>1 else 1)
+                      gap=extra/(len(words)-1) if len(words)>1 else 0
                       if 0 < gap < 70*SCALE:
                           tx=LEFT_W+int(50*SCALE)
                           for w in words:
