@@ -1,5 +1,4 @@
 name: Image + Audio to Surah Video - Fixed V2
-
 on:
   workflow_dispatch:
     inputs:
@@ -24,7 +23,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -37,7 +35,6 @@ jobs:
           IMG_DIR="${{ inputs.image_folder }}"
           AUDIO_DIR="${{ inputs.audio_folder }}"
           SURAH="${{ inputs.surah_number }}"
-
           TEMP_VIDEO_DIR="temp_${SURAH}_videos"
           FINAL_DIR="rizwanSurahVideo"
 
@@ -51,6 +48,7 @@ jobs:
             audio_file="$AUDIO_DIR/$base.mp3"
 
             echo "Processing: $file_name -> $base.mp4"
+
             if [ -f "$audio_file" ]; then
               ffmpeg -y -hide_banner -loglevel error \
                 -loop 1 -i "$img_file" \
@@ -66,13 +64,14 @@ jobs:
           echo "Temp videos created:"
           ls -lh "$TEMP_VIDEO_DIR"/
 
-          # Check if any video exists - FIXED LINE HERE
-          if! ls "$TEMP_VIDEO_DIR"/${SURAH}*.mp4 1> /dev/null 2>&1; then
+          # Fixed missing space between 'if' and '!'
+          if ! ls "$TEMP_VIDEO_DIR"/${SURAH}*.mp4 1> /dev/null 2>&1; then
             echo "No videos found to merge for Surah $SURAH"
             exit 1
           fi
 
           ls -1 "$TEMP_VIDEO_DIR"/${SURAH}*.mp4 | sort -V > video_list_raw.txt
+
           rm -f concat_videos.txt
           while read f; do
             echo "file '$PWD/$f'" >> concat_videos.txt
