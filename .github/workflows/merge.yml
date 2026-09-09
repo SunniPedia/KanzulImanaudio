@@ -1,0 +1,55 @@
+name: Merge Arabic + Bangla Audio
+
+on:
+  workflow_dispatch:
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Merge Audios into kanzulImanAudio
+        run: |
+          ARABIC_DIR="Audio/alafasy/128"
+          BANGLA_DIR="audio/bangla"
+          OUTPUT_DIR="kanzulImanAudio"
+
+          mkdir -p "$OUTPUT_DIR"
+
+          echo "Merging started..."
+
+          for arabic_file in $ARABIC_DIR/*.mp3; do
+            [ -e "$arabic_file" ] || continue
+
+            file_name=$(basename "$arabic_file")
+            bangla_file="$BANGLA_DIR/$file_name"
+            output_file="$OUTPUT_DIR/$file_name"
+
+            if [ -f "$bangla_file" ]; then
+              echo "Merging $file_name (Arabic + Bangla)"
+              # আরবি + বাংলা জোড়া লাগানো
+              ffmpeg -y -i "$arabic_file" -i "$bangla_file" -filter_complex "[0:a][1:a]concat=n=2:v=0:a=1[a]" -map "[a]" -b:a 128k "$output_file"
+            else
+              echo "Bangla not found for $file_name, copying only Arabic"
+              cp "$arabic_file" "$output_file"
+            fi
+          done
+
+          echo "All merged files:"
+          ls -lh $OUTPUT_DIR/
+
+      - name: Commit Merged Files
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add kanzulImanAudio/
+          git diff --staged --quiet || git commit -m "Merged Arabic + Bangla Audio into kanzulImanAudio"
+          git push
