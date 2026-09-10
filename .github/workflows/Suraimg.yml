@@ -132,12 +132,19 @@ jobs:
               if value:
                   draw.text((start_x+label_w+colon_w, y), " "+value, font=font, fill=fill)
 
+          # FIX 1: বিসমিল্লাহ (verses == 0) এর ক্ষেত্রে আয়াত সংখ্যা "০০" না দেখিয়ে
+          # শুধু "০" দেখানো হবে। অন্য সব আয়াতের জন্য আগের মতোই ২ ডিজিট পার্সিং
+          # (০১, ০২ ... ০৯, ১০, ১১ ...) বহাল থাকবে।
+          def disp(n):
+              if n == 0:
+                  return "0"
+              return f"0{n}" if n < 10 else str(n)
+
           for item in data:
               sura_int=extract_number(item.get('sura','0'))
               ayat_int=extract_number(item.get('verses','0'))
               filename=f"{sura_int:03d}{ayat_int:03d}.jpg"
 
-              def disp(n): return f"0{n}" if n<10 else str(n)
               sura_disp=to_bangla_num(disp(sura_int))
               ayat_disp=to_bangla_num(disp(ayat_int))
 
@@ -157,6 +164,13 @@ jobs:
               f_kanzul=get_font(False, BASE_KANZUL)
               max_w=W-LEFT_W-int(140*SCALE)
 
+              # FIX 2: আরবি আয়াত যেন কোনো অবস্থাতেই ক্যানভাসের বাইরে গিয়ে
+              # কাটা/বাদ না পড়ে, তাই এখন ব্লকের উচ্চতার পাশাপাশি প্রতিটি লাইনের
+              # প্রস্থ (line width) ও max_w এর মধ্যে আছে কিনা তা যাচাই করা হচ্ছে।
+              # কোনো একটি একক শব্দ (বিশেষত দীর্ঘ যুক্তবর্ণ/হারাকাতযুক্ত শব্দ)
+              # নিজেই max_w এর চেয়ে চওড়া হলে আগে তা ধরা পড়ত না — এখন ফন্ট
+              # আরও ছোট করে (ফ্লোর পর্যন্ত) নিশ্চিত করা হচ্ছে যে কোনো লাইন
+              # সীমার বাইরে গিয়ে আড়াল/কাটা পড়বে না।
               temp_AR = BASE_AR
               while True:
                   f_ar=get_font(True, temp_AR)
@@ -171,8 +185,15 @@ jobs:
                           if cur: arabic_lines.append(cur)
                           cur=w
                   if cur: arabic_lines.append(cur)
+
+                  line_widths = [draw.textlength(line, font=f_ar) for line in arabic_lines]
+                  max_line_w = max(line_widths) if line_widths else 0
+
                   ar_block_h = len(arabic_lines) * int(temp_AR*SCALE*1.5)
-                  if ar_block_h <= (H - int(200*SCALE)) * 0.55 or temp_AR <= 50:
+                  fits_height = ar_block_h <= (H - int(200*SCALE)) * 0.55
+                  fits_width = max_line_w <= max_w
+
+                  if (fits_height and fits_width) or temp_AR <= 50:
                       BASE_AR = temp_AR
                       break
                   temp_AR -= 2
@@ -269,5 +290,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -f output/
-          git commit -m "center sura ayat + bottom margin 5dp" || echo "no changes"
+          git commit -m "fix: ayat 0 (bismillah) display + prevent arabic line overflow/truncation" || echo "no changes"
           git push
