@@ -145,6 +145,13 @@ jobs:
           ORIG_KANZUL=42
           ORIG_BN=52
           ORIG_AR=80
+          # Short texts (e.g. header/Bismillah entries with ayat=000) would otherwise
+          # stay near ORIG_AR since they easily fit in fewer lines. At that large a
+          # size the noorehuda.ttf font drops the initial আলিফ (Alif) in "ال" sequences
+          # (e.g. "اللَّهِ" renders as "لَّهِ"). Capping the max size avoids the bug
+          # while regular (longer) ayat text is unaffected, since it already shrinks
+          # well below this cap anyway.
+          AR_MAX_DP=60
 
           # Line-height multipliers (centralised so they're easy to tune)
           LH_SURA=1.6
@@ -232,10 +239,10 @@ jobs:
                   LINE_Y=AYAT_Y + int(ORIG_SURA*SCALE*LH_SURA)
                   NAMES_Y = LINE_Y + int(55*SCALE)
 
-              # --- AR FONT LOGIC (auto-fit) ---
-              cur_ar_size = ORIG_AR
+              # --- AR FONT LOGIC (auto-fit, capped at AR_MAX_DP) ---
+              cur_ar_size = min(ORIG_AR, AR_MAX_DP)
               arabic_lines = []
-              temp_AR = ORIG_AR
+              temp_AR = min(ORIG_AR, AR_MAX_DP)
               arabic_raw=item.get('names','').strip()
               while True:
                   f_ar_temp=get_font(True, temp_AR)
