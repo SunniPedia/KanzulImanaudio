@@ -2,13 +2,17 @@ name: Merge Arabic + Bangla Rizwan
 
 on:
   workflow_dispatch:
+    inputs:
+      surah_number:
+        description: 'সূরার ৩ ডিজিটের নম্বর লিখুন (যেমন: 001, 002, 114)'
+        required: true
+        default: '001'
 
 jobs:
   merge:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -16,15 +20,19 @@ jobs:
       - name: Install FFmpeg
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
-      - name: Merge Audios
+      - name: Merge Audios for Specific Surah
         run: |
           ARABIC_DIR="Audio/alafasy/128"
           BANGLA_DIR="Audio/bangla"
           OUTPUT_DIR="rizwanaudio"
+          SURAH="${{ github.event.inputs.surah_number }}"
 
           mkdir -p "$OUTPUT_DIR"
 
-          for arabic_file in "$ARABIC_DIR"/*.mp3; do
+          echo "প্রসেস করা হচ্ছে সূরা নম্বর: $SURAH"
+
+          # নির্দিষ্ট সূরার প্যাটার্ন (যেমন: 001*.mp3) অনুযায়ী ফাইল খোঁজা হচ্ছে
+          for arabic_file in "$ARABIC_DIR"/${SURAH}*.mp3; do
             [ -e "$arabic_file" ] || continue
             file_name=$(basename "$arabic_file")
             bangla_file="$BANGLA_DIR/$file_name"
@@ -37,23 +45,21 @@ jobs:
               cp "$arabic_file" "$output_file"
             fi
           done
+
           ls -lh "$OUTPUT_DIR"/
 
       - name: Upload Artifact (Download from here)
         uses: actions/upload-artifact@v4
         with:
-          name: rizwanaudio-Merged
+          name: rizwanaudio-Surah-${{ github.event.inputs.surah_number }}
           path: rizwanaudio/
 
       - name: Force Commit to Repo
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-
-          # Remove old folder if exists
           rm -rf kanzulImanAudio
           git rm -r --cached kanzulImanAudio || true
-
           git add -f rizwanaudio/
-          git commit -m "Merged Arabic + Bangla Audio to rizwanaudio" || echo "No changes to commit"
+          git commit -m "Merged Surah ${{ github.event.inputs.surah_number }} Audio to rizwanaudio" || echo "No changes to commit"
           git push
