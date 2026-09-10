@@ -31,7 +31,7 @@ jobs:
         run: |
           python3 << 'PY'
           from PIL import Image, ImageDraw, ImageFont
-          import json, os, re, shutil
+          import json, os, re, shutil, sys
 
           BG="src/background.jpg"
           LOGO="src/logo.jpg"
@@ -53,28 +53,91 @@ jobs:
           def extract_number(s):
               s=str(s).translate(str.maketrans("০১২৩৪৫৬৭৮৯","0123456789"))
               m=re.search(r'\d+',s)
-              return int(m.group()) if m else 0
+              return int(m.group()) if m else None
           def clean_name(text):
               text = re.sub(r'\s*\(\s*[0-9০-৯]+\s*\)', '', text)
               return re.sub(r'\s{2,}', ' ', text).strip()
 
-          W,H=3840,2160
-          bg_img=Image.open(BG).convert("RGB") if os.path.exists(BG) else Image.new("RGB",(W,H),(232,236,244))
+          # --- Fonts must exist, otherwise output will silently render boxes/tofu ---
+          missing_fonts = [p for p in (FONT_AR, FONT_BN) if not os.path.exists(p)]
+          if missing_fonts:
+              print(f"ERROR: Missing font file(s): {missing_fonts}")
+              sys.exit(1)
+
+          bg_img=Image.open(BG).convert("RGB") if os.path.exists(BG) else Image.new("RGB",(3840,2160),(232,236,244))
           W,H=bg_img.size
 
           LEFT_W=int(W*0.22)
           SCALE=W/1280
           print(f"BG Size: {W}x{H}, SCALE: {SCALE}, LEFT_W: {LEFT_W}")
 
+          # --- Font cache: avoid reloading the same truetype font repeatedly ---
+          _font_cache = {}
           def get_font_by_size(is_ar, px_size):
-              p=FONT_AR if is_ar else FONT_BN
-              try: return ImageFont.truetype(p, int(px_size))
-              except: return ImageFont.load_default()
+              px_size = max(1, int(px_size))
+              key = (is_ar, px_size)
+              if key in _font_cache:
+                  return _font_cache[key]
+              path = FONT_AR if is_ar else FONT_BN
+              try:
+                  font = ImageFont.truetype(path, px_size)
+              except Exception as e:
+                  print(f"WARNING: Failed to load font '{path}' at size {px_size}: {e}. Falling back to default font (Bangla/Arabic glyphs will NOT render correctly).")
+                  font = ImageFont.load_default()
+              _font_cache[key] = font
+              return font
+
           def get_font(is_ar, dp):
               return get_font_by_size(is_ar, dp*SCALE)
 
           with open(DATA, encoding="utf-8") as f:
               data=json.load(f)
+
+          # --- Validate data & detect duplicate output filenames before rendering anything ---
+          seen_filenames = {}
+          validated_items = []
+          for idx, item in enumerate(data):
+              sura_raw = item.get('sura')
+              verses_raw = item.get('verses')
+              sura_int = extract_number(sura_raw) if sura_raw is not None else None
+              ayat_int = extract_number(verses_raw) if verses_raw is not None else None
+
+              if sura_int is None:
+                  print(f"WARNING: Item index {idx} has missing/invalid 'sura' value ({sura_raw!r}); skipping this item.")
+                  continue
+              if ayat_int is None:
+                  print(f"WARNING: Item index {idx} (sura {sura_int}) has missing/invalid 'verses' value ({verses_raw!r}); skipping this item.")
+                  continue
+              if not str(item.get('names','')).strip():
+                  print(f"WARNING: Item index {idx} (sura {sura_int}, ayat {ayat_int}) has empty Arabic 'names' field.")
+              if not str(item.get('name','')).strip():
+                  print(f"WARNING: Item index {idx} (sura {sura_int}, ayat {ayat_int}) has empty Bangla 'name' field.")
+
+              filename=f"{sura_int:03d}{ayat_int:03d}.jpg"
+              if filename in seen_filenames:
+                  print(f"ERROR: Duplicate output filename '{filename}' from item index {idx} (also produced by index {seen_filenames[filename]}). Skipping duplicate to avoid overwriting.")
+                  continue
+              seen_filenames[filename] = idx
+              validated_items.append((filename, sura_int, ayat_int, item))
+
+          if not validated_items:
+              print("ERROR: No valid items to render after validation. Exiting.")
+              sys.exit(1)
+
+          def get_font_by_size(is_ar, px_size):
+              # redefined to keep the outer cache in scope after validation block
+              px_size = max(1, int(px_size))
+              key = (is_ar, px_size)
+              if key in _font_cache:
+                  return _font_cache[key]
+              path = FONT_AR if is_ar else FONT_BN
+              try:
+                  font = ImageFont.truetype(path, px_size)
+              except Exception as e:
+                  print(f"WARNING: Failed to load font '{path}' at size {px_size}: {e}. Falling back to default font.")
+                  font = ImageFont.load_default()
+              _font_cache[key] = font
+              return font
 
           # ORIGINAL SIZE - এগুলো কখনো change হবে না
           ORIG_SURA=40
@@ -82,6 +145,12 @@ jobs:
           ORIG_KANZUL=42
           ORIG_BN=52
           ORIG_AR=80
+
+          # Line-height multipliers (centralised so they're easy to tune)
+          LH_SURA=1.6
+          LH_AR=1.5
+          LH_BN=1.4
+          LH_DETAILS=1.6
 
           BOTTOM_MARGIN_DP = 5
           BOTTOM_MARGIN = int(BOTTOM_MARGIN_DP * SCALE)
@@ -127,19 +196,16 @@ jobs:
               if value:
                   draw.text((start_x+label_w+colon_w, y), " "+value, font=font, fill=fill)
 
-          for item in data:
-              sura_int=extract_number(item.get('sura','0'))
-              ayat_int=extract_number(item.get('verses','0'))
-              filename=f"{sura_int:03d}{ayat_int:03d}.jpg"
-
-              # --- NEW: Check if ayat is 0 (header image like 002000.jpg) ---
+          total = len(validated_items)
+          for n, (filename, sura_int, ayat_int, item) in enumerate(validated_items, start=1):
               is_header = (ayat_int == 0)
 
               def disp(n): return f"0{n}" if n<10 else str(n)
               sura_disp=to_bangla_num(disp(sura_int))
               ayat_disp=to_bangla_num(disp(ayat_int)) if not is_header else ""
 
-              bg=bg_img.resize((W,H), Image.LANCZOS)
+              # No need to resize: bg_img is already WxH. Just copy it.
+              bg=bg_img.copy()
               draw=ImageDraw.Draw(bg)
               draw.rectangle([0,0,LEFT_W,H], fill=(214,218,228))
               draw.line([(LEFT_W,0),(LEFT_W,H)], fill=(35,45,85), width=int(4*SCALE))
@@ -149,30 +215,30 @@ jobs:
                       ls=int(200*SCALE)
                       logo=Image.open(LOGO).convert("RGBA").resize((ls,ls), Image.LANCZOS)
                       bg.paste(logo,(int((LEFT_W-ls)//2), int(30*SCALE)), logo)
-                  except: pass
+                  except Exception as e:
+                      print(f"WARNING: Could not paste logo for {filename}: {e}")
 
               f_sura=get_font(False, ORIG_SURA)
               f_kanzul=get_font(False, ORIG_KANZUL)
               max_w=W-LEFT_W-int(140*SCALE)
 
-              # Position logic updated for header
+              # Position logic - header images skip the "আয়াত" row entirely
               SURA_Y=int(300*SCALE)
               if is_header:
-                  AYAT_Y=SURA_Y # use same, but won't be drawn
-                  LINE_Y=SURA_Y + int(ORIG_SURA*SCALE*1.6)
+                  LINE_Y=SURA_Y + int(ORIG_SURA*SCALE*LH_SURA)
                   NAMES_Y = LINE_Y + int(55*SCALE)
               else:
-                  AYAT_Y=SURA_Y + int(ORIG_SURA*SCALE*1.6)
-                  LINE_Y=AYAT_Y + int(ORIG_SURA*SCALE*1.6)
+                  AYAT_Y=SURA_Y + int(ORIG_SURA*SCALE*LH_SURA)
+                  LINE_Y=AYAT_Y + int(ORIG_SURA*SCALE*LH_SURA)
                   NAMES_Y = LINE_Y + int(55*SCALE)
 
-              # --- FIXED: AR FONT LOGIC ---
+              # --- AR FONT LOGIC (auto-fit) ---
               cur_ar_size = ORIG_AR
               arabic_lines = []
               temp_AR = ORIG_AR
+              arabic_raw=item.get('names','').strip()
               while True:
                   f_ar_temp=get_font(True, temp_AR)
-                  arabic_raw=item.get('names','').strip()
                   arabic_lines=[]
                   cur=""
                   for w in arabic_raw.split():
@@ -183,7 +249,7 @@ jobs:
                           if cur: arabic_lines.append(cur)
                           cur=w
                   if cur: arabic_lines.append(cur)
-                  ar_block_h = len(arabic_lines) * int(temp_AR*SCALE*1.5)
+                  ar_block_h = len(arabic_lines) * int(temp_AR*SCALE*LH_AR)
                   if ar_block_h <= (H - int(200*SCALE)) * 0.55 or temp_AR <= 50:
                       cur_ar_size = temp_AR
                       break
@@ -191,13 +257,13 @@ jobs:
 
               f_ar = get_font(True, cur_ar_size)
 
-              # --- FIXED: BN FONT LOGIC ---
+              # --- BN FONT LOGIC (auto-fit) ---
               cur_bn_size = ORIG_BN
               bn_lines = []
               temp_BN = ORIG_BN
+              cleaned=clean_name(item.get('name',''))
               while True:
                   f_bn_temp=get_font(False, temp_BN)
-                  cleaned=clean_name(item.get('name',''))
                   bn_lines=[]
                   cur=""
                   for w in cleaned.split():
@@ -208,7 +274,7 @@ jobs:
                           if cur: bn_lines.append(cur)
                           cur=w
                   if cur: bn_lines.append(cur)
-                  needed = len(arabic_lines)*int(cur_ar_size*SCALE*1.5) + int(50*SCALE) + int(75*SCALE) + len(bn_lines)*int(temp_BN*SCALE*1.45)
+                  needed = len(arabic_lines)*int(cur_ar_size*SCALE*LH_AR) + int(50*SCALE) + int(75*SCALE) + len(bn_lines)*int(temp_BN*SCALE*1.45)
                   if needed < H - TOP_MARGIN - BOTTOM_MARGIN or temp_BN <= 30:
                       cur_bn_size = temp_BN
                       break
@@ -216,17 +282,17 @@ jobs:
 
               f_bn=get_font(False, cur_bn_size)
 
-              arabic_block_h = len(arabic_lines) * int(cur_ar_size*SCALE*1.5)
+              arabic_block_h = len(arabic_lines) * int(cur_ar_size*SCALE*LH_AR)
               gap_after_arabic = int(50*SCALE)
               kanzul_block_h = int(75*SCALE)
-              bn_block_h = len(bn_lines) * int(cur_bn_size*SCALE*1.4)
+              bn_block_h = len(bn_lines) * int(cur_bn_size*SCALE*LH_BN)
               total_block_h = arabic_block_h + gap_after_arabic + kanzul_block_h + bn_block_h
 
               start_y = max(TOP_MARGIN, (H - total_block_h - BOTTOM_MARGIN) // 2)
               if start_y + total_block_h + BOTTOM_MARGIN > H:
                   start_y = H - total_block_h - BOTTOM_MARGIN
 
-              # --- UPDATED DRAW LOGIC FOR 0 AYAT ---
+              # Draw সূরা (always) and আয়াত (only when not a header image)
               draw_centered_label_colon(draw, SURA_Y, "সূরা", sura_disp, f_sura, (0,0,0))
               if not is_header:
                   draw_centered_label_colon(draw, AYAT_Y, "আয়াত", ayat_disp, f_sura, (0,0,0))
@@ -241,14 +307,14 @@ jobs:
               bn_x = (LEFT_W - bn_w)//2
               dy = NAMES_Y
               draw.text((ar_x, dy), AR_NAME, font=f_ar_det, fill=(20,20,60))
-              dy += int(cur_details_size*SCALE*1.6) + GAP_Y_DETAILS
+              dy += int(cur_details_size*SCALE*LH_DETAILS) + GAP_Y_DETAILS
               draw.text((bn_x, dy), BN_NAME, font=f_bn_det, fill=(20,20,60))
 
               y=start_y
               for line in arabic_lines:
                   w=draw.textlength(line, font=f_ar)
                   draw.text((W-int(70*SCALE)-w, y), line, font=f_ar, fill=(0,0,0))
-                  y+=int(cur_ar_size*SCALE*1.5)
+                  y+=int(cur_ar_size*SCALE*LH_AR)
 
               y+=int(50*SCALE)
               draw_label_colon(draw, LEFT_W+int(50*SCALE), y, "কানযুল ঈমান থেকে অনুবাদ", "", f_kanzul, (20,40,120))
@@ -270,12 +336,13 @@ jobs:
                           draw.text((LEFT_W+int(50*SCALE), y), line, font=f_bn, fill=(15,25,85))
                   else:
                       draw.text((LEFT_W+int(50*SCALE), y), line, font=f_bn, fill=(15,25,85))
-                  y+=int(cur_bn_size*SCALE*1.4)
+                  y+=int(cur_bn_size*SCALE*LH_BN)
 
               bg.save(os.path.join(OUT, filename), "JPEG", quality=95, subsampling=0)
               status = "HEADER (No Ayat)" if is_header else f"AR {cur_ar_size}dp, BN {cur_bn_size}dp"
-              print(f"Done {filename} with {status}, start_y={start_y}")
+              print(f"[{n}/{total}] Done {filename} with {status}, start_y={start_y}")
 
+          print(f"Finished: {total} image(s) generated in '{OUT}/'.")
           PY
 
       - name: Upload artifact
@@ -286,9 +353,21 @@ jobs:
           retention-days: 7
 
       - name: Push output
+        env:
+          ARABIC_NAME: ${{ inputs.arabic_name }}
+          BANGLA_NAME: ${{ inputs.bangla_name }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          COUNT=$(find output -type f -name '*.jpg' | wc -l)
+          COMMIT_MSG="chore: generate ${COUNT} ayah image(s) for ${ARABIC_NAME} / ${BANGLA_NAME}"
+
           git add -f output/
-          git commit -m "fix: hide ayat label when ayat is 0 for header images" || echo "no changes"
-          git push
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "$COMMIT_MSG"
+            git pull --rebase origin "${GITHUB_REF_NAME}" || true
+            git push
+          fi
