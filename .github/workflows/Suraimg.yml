@@ -83,14 +83,9 @@ jobs:
           ORIG_BN=52
           ORIG_AR=80
 
-          SURA_Y=int(300*SCALE)
-          AYAT_Y=SURA_Y + int(ORIG_SURA*SCALE*1.6)
-          LINE_Y=AYAT_Y + int(ORIG_SURA*SCALE*1.6)
-
           BOTTOM_MARGIN_DP = 5
           BOTTOM_MARGIN = int(BOTTOM_MARGIN_DP * SCALE)
           TOP_MARGIN = int(120*SCALE)
-
           SIDE_MARGIN=int(30*SCALE)
           AVAIL_W_NAMES = LEFT_W - 2*SIDE_MARGIN
           DETAILS_FLOOR=32
@@ -110,8 +105,6 @@ jobs:
                   break
               temp_DET -= 2
           print(f"Details font fixed at: {cur_details_size}")
-
-          NAMES_Y = LINE_Y + int(55*SCALE)
 
           def draw_label_colon(draw, x, y, label, value, font, fill):
               draw.text((x, y), label, font=font, fill=fill)
@@ -139,9 +132,12 @@ jobs:
               ayat_int=extract_number(item.get('verses','0'))
               filename=f"{sura_int:03d}{ayat_int:03d}.jpg"
 
+              # --- NEW: Check if ayat is 0 (header image like 002000.jpg) ---
+              is_header = (ayat_int == 0)
+
               def disp(n): return f"0{n}" if n<10 else str(n)
               sura_disp=to_bangla_num(disp(sura_int))
-              ayat_disp=to_bangla_num(disp(ayat_int))
+              ayat_disp=to_bangla_num(disp(ayat_int)) if not is_header else ""
 
               bg=bg_img.resize((W,H), Image.LANCZOS)
               draw=ImageDraw.Draw(bg)
@@ -159,8 +155,18 @@ jobs:
               f_kanzul=get_font(False, ORIG_KANZUL)
               max_w=W-LEFT_W-int(140*SCALE)
 
+              # Position logic updated for header
+              SURA_Y=int(300*SCALE)
+              if is_header:
+                  AYAT_Y=SURA_Y # use same, but won't be drawn
+                  LINE_Y=SURA_Y + int(ORIG_SURA*SCALE*1.6)
+                  NAMES_Y = LINE_Y + int(55*SCALE)
+              else:
+                  AYAT_Y=SURA_Y + int(ORIG_SURA*SCALE*1.6)
+                  LINE_Y=AYAT_Y + int(ORIG_SURA*SCALE*1.6)
+                  NAMES_Y = LINE_Y + int(55*SCALE)
+
               # --- FIXED: AR FONT LOGIC ---
-              # প্রতি আয়াতের জন্য ORIG_AR থেকে শুরু
               cur_ar_size = ORIG_AR
               arabic_lines = []
               temp_AR = ORIG_AR
@@ -186,7 +192,6 @@ jobs:
               f_ar = get_font(True, cur_ar_size)
 
               # --- FIXED: BN FONT LOGIC ---
-              # প্রতি আয়াতের জন্য ORIG_BN থেকে শুরু
               cur_bn_size = ORIG_BN
               bn_lines = []
               temp_BN = ORIG_BN
@@ -221,8 +226,11 @@ jobs:
               if start_y + total_block_h + BOTTOM_MARGIN > H:
                   start_y = H - total_block_h - BOTTOM_MARGIN
 
+              # --- UPDATED DRAW LOGIC FOR 0 AYAT ---
               draw_centered_label_colon(draw, SURA_Y, "সূরা", sura_disp, f_sura, (0,0,0))
-              draw_centered_label_colon(draw, AYAT_Y, "আয়াত", ayat_disp, f_sura, (0,0,0))
+              if not is_header:
+                  draw_centered_label_colon(draw, AYAT_Y, "আয়াত", ayat_disp, f_sura, (0,0,0))
+
               draw.line([(int(40*SCALE), LINE_Y), (int(LEFT_W-40*SCALE), LINE_Y)], fill=(100,100,120), width=2)
 
               f_ar_det=get_font_by_size(True, cur_details_size*SCALE)
@@ -265,7 +273,8 @@ jobs:
                   y+=int(cur_bn_size*SCALE*1.4)
 
               bg.save(os.path.join(OUT, filename), "JPEG", quality=95, subsampling=0)
-              print(f"Done {filename} with AR {cur_ar_size}dp, BN {cur_bn_size}dp, start_y={start_y}")
+              status = "HEADER (No Ayat)" if is_header else f"AR {cur_ar_size}dp, BN {cur_bn_size}dp"
+              print(f"Done {filename} with {status}, start_y={start_y}")
 
           PY
 
@@ -281,5 +290,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -f output/
-          git commit -m "fix AR BN font auto-scale per ayah" || echo "no changes"
+          git commit -m "fix: hide ayat label when ayat is 0 for header images" || echo "no changes"
           git push
