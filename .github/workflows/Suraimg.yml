@@ -40,7 +40,16 @@ jobs:
           FONT_BN="src/solaimanlipi.ttf"
           FONT_AR="src/noorehuda.ttf"
 
-          AR_NAME=os.environ.get("ARABIC_NAME","").strip()
+          # FIX: কিছু আরবি ফন্টে (যেমন noorehuda.ttf) কুরআনের উসমানী স্ক্রিপ্টে
+          # ব্যবহৃত "ওয়াসলা-যুক্ত আলিফ" (ٱ, U+0671) এর গ্লিফ থাকে না, ফলে সেটা
+          # ফাঁকা/অদৃশ্য রেন্ডার হয় (যেমন ٱللَّهِ থেকে আলিফ বাদ পড়া)। তাই শুধু
+          # ছবি বানানোর সময় (data.json এর মূল ডেটা অপরিবর্তিত রেখে) সেটাকে
+          # সাধারণ আলিফ (ا, U+0627) দিয়ে প্রতিস্থাপন করা হচ্ছে, যা প্রায় সব
+          # আরবি ফন্টেই সাপোর্টেড।
+          def normalize_arabic_display(text):
+              return text.replace('\u0671', '\u0627')
+
+          AR_NAME=normalize_arabic_display(os.environ.get("ARABIC_NAME","").strip())
           BN_NAME=os.environ.get("BANGLA_NAME","").strip()
           print(f"ARABIC_NAME={AR_NAME!r}, BANGLA_NAME={BN_NAME!r}")
 
@@ -86,6 +95,10 @@ jobs:
           SURA_Y=int(300*SCALE)
           AYAT_Y=SURA_Y + int(BASE_SURA*SCALE*1.6)
           LINE_Y=AYAT_Y + int(BASE_SURA*SCALE*1.6)
+          # বিসমিল্লাহ (আয়াত ০) এর ক্ষেত্রে "আয়াত" লাইনটা দেখানো হবে না, তাই
+          # সেই ক্ষেত্রে ডিভাইডার লাইনটা এক ধাপ উপরে (আয়াতের জন্য বরাদ্দ জায়গা
+          # বাদ দিয়ে) বসবে, যাতে খালি জায়গা না থাকে।
+          LINE_Y_NO_AYAT=SURA_Y + int(BASE_SURA*SCALE*1.6)
 
           BOTTOM_MARGIN_DP = 5
           BOTTOM_MARGIN = int(BOTTOM_MARGIN_DP * SCALE)
@@ -109,8 +122,6 @@ jobs:
                   break
               temp_DET -= 2
 
-          NAMES_Y = LINE_Y + int(55*SCALE)
-
           def draw_label_colon(draw, x, y, label, value, font, fill):
               draw.text((x, y), label, font=font, fill=fill)
               label_w = draw.textlength(label, font=font)
@@ -132,9 +143,9 @@ jobs:
               if value:
                   draw.text((start_x+label_w+colon_w, y), " "+value, font=font, fill=fill)
 
-          # FIX 1: বিসমিল্লাহ (verses == 0) এর ক্ষেত্রে আয়াত সংখ্যা "০০" না দেখিয়ে
-          # শুধু "০" দেখানো হবে। অন্য সব আয়াতের জন্য আগের মতোই ২ ডিজিট পার্সিং
-          # (০১, ০২ ... ০৯, ১০, ১১ ...) বহাল থাকবে।
+          # বিসমিল্লাহ (verses == 0) এর ক্ষেত্রে আয়াত সংখ্যা "০০" না দেখিয়ে
+          # শুধু "০" দেখানো হতো, কিন্তু এখন verses==0 হলে আয়াত লাইনটাই আঁকা
+          # হবে না (নিচে দেখুন), তাই এই ফাংশন শুধু সূরা নম্বরের জন্য ব্যবহৃত হয়।
           def disp(n):
               if n == 0:
                   return "0"
@@ -147,6 +158,12 @@ jobs:
 
               sura_disp=to_bangla_num(disp(sura_int))
               ayat_disp=to_bangla_num(disp(ayat_int))
+              show_ayat = ayat_int != 0
+
+              # এই আইটেমের জন্য ডিভাইডার লাইন ও তার নিচের ব্লকের Y পজিশন
+              # নির্ধারণ — আয়াত লাইন না থাকলে এক ধাপ উপরে বসবে।
+              line_y = LINE_Y if show_ayat else LINE_Y_NO_AYAT
+              names_y = line_y + int(55*SCALE)
 
               bg=bg_img.resize((W,H), Image.LANCZOS)
               draw=ImageDraw.Draw(bg)
@@ -164,17 +181,16 @@ jobs:
               f_kanzul=get_font(False, BASE_KANZUL)
               max_w=W-LEFT_W-int(140*SCALE)
 
-              # FIX 2: আরবি আয়াত যেন কোনো অবস্থাতেই ক্যানভাসের বাইরে গিয়ে
-              # কাটা/বাদ না পড়ে, তাই এখন ব্লকের উচ্চতার পাশাপাশি প্রতিটি লাইনের
-              # প্রস্থ (line width) ও max_w এর মধ্যে আছে কিনা তা যাচাই করা হচ্ছে।
-              # কোনো একটি একক শব্দ (বিশেষত দীর্ঘ যুক্তবর্ণ/হারাকাতযুক্ত শব্দ)
-              # নিজেই max_w এর চেয়ে চওড়া হলে আগে তা ধরা পড়ত না — এখন ফন্ট
-              # আরও ছোট করে (ফ্লোর পর্যন্ত) নিশ্চিত করা হচ্ছে যে কোনো লাইন
-              # সীমার বাইরে গিয়ে আড়াল/কাটা পড়বে না।
+              # আরবি আয়াত যেন কোনো অবস্থাতেই ক্যানভাসের বাইরে গিয়ে কাটা/বাদ না
+              # পড়ে, তাই ব্লকের উচ্চতার পাশাপাশি প্রতিটি লাইনের প্রস্থও (line
+              # width) max_w এর মধ্যে আছে কিনা যাচাই করা হচ্ছে। কোনো একক শব্দ
+              # (দীর্ঘ যুক্তবর্ণ/হারাকাতযুক্ত) নিজেই max_w এর চেয়ে চওড়া হলে আগে
+              # তা ধরা পড়ত না — এখন ফন্ট আরও ছোট করে (ফ্লোর পর্যন্ত) নিশ্চিত
+              # করা হচ্ছে কোনো লাইন সীমার বাইরে গিয়ে কাটা পড়বে না।
               temp_AR = BASE_AR
               while True:
                   f_ar=get_font(True, temp_AR)
-                  arabic_raw=item.get('names','').strip()
+                  arabic_raw=normalize_arabic_display(item.get('names','').strip())
                   arabic_lines=[]
                   cur=""
                   for w in arabic_raw.split():
@@ -231,8 +247,9 @@ jobs:
                   start_y = H - total_block_h - BOTTOM_MARGIN
 
               draw_centered_label_colon(draw, SURA_Y, "সূরা", sura_disp, f_sura, (0,0,0))
-              draw_centered_label_colon(draw, AYAT_Y, "আয়াত", ayat_disp, f_sura, (0,0,0))
-              draw.line([(int(40*SCALE), LINE_Y), (int(LEFT_W-40*SCALE), LINE_Y)], fill=(100,100,120), width=2)
+              if show_ayat:
+                  draw_centered_label_colon(draw, AYAT_Y, "আয়াত", ayat_disp, f_sura, (0,0,0))
+              draw.line([(int(40*SCALE), line_y), (int(LEFT_W-40*SCALE), line_y)], fill=(100,100,120), width=2)
 
               f_ar_det=get_font_by_size(True, BASE_DETAILS_AR*SCALE)
               f_bn_det=get_font_by_size(False, BASE_DETAILS_BN*SCALE)
@@ -240,7 +257,7 @@ jobs:
               bn_w = draw.textlength(BN_NAME, font=f_bn_det)
               ar_x = (LEFT_W - ar_w)//2
               bn_x = (LEFT_W - bn_w)//2
-              dy = NAMES_Y
+              dy = names_y
               draw.text((ar_x, dy), AR_NAME, font=f_ar_det, fill=(20,20,60))
               dy += int(BASE_DETAILS_AR*SCALE*1.6) + GAP_Y_DETAILS
               draw.text((bn_x, dy), BN_NAME, font=f_bn_det, fill=(20,20,60))
@@ -274,7 +291,7 @@ jobs:
                   y+=int(BASE_BN*SCALE*1.4)
 
               bg.save(os.path.join(OUT, filename), "JPEG", quality=95, subsampling=0)
-              print(f"Done {filename} with AR {BASE_AR}dp, BN {BASE_BN}dp, start_y={start_y}")
+              print(f"Done {filename} with AR {BASE_AR}dp, BN {BASE_BN}dp, start_y={start_y}, show_ayat={show_ayat}")
 
           PY
 
@@ -290,5 +307,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -f output/
-          git commit -m "fix: ayat 0 (bismillah) display + prevent arabic line overflow/truncation" || echo "no changes"
+          git commit -m "fix: normalize alef wasla for font glyph support + hide ayat line for bismillah" || echo "no changes"
           git push
