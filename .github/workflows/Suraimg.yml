@@ -22,7 +22,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-      - run: pip install Pillow arabic-reshaper python-bidi
+      - run: pip install Pillow
 
       - name: Generate Fixed Images
         env:
@@ -32,8 +32,6 @@ jobs:
           python3 << 'PY'
           from PIL import Image, ImageDraw, ImageFont
           import json, os, re, shutil
-          import arabic_reshaper
-          from bidi.algorithm import get_display
 
           BG="src/background.jpg"
           LOGO="src/logo.jpg"
@@ -44,37 +42,21 @@ jobs:
 
           AR_NAME=os.environ.get("ARABIC_NAME","").strip()
           BN_NAME=os.environ.get("BANGLA_NAME","").strip()
+          print(f"ARABIC_NAME={AR_NAME!r}, BANGLA_NAME={BN_NAME!r}")
 
           if os.path.exists(OUT):
               shutil.rmtree(OUT)
           os.makedirs(OUT, exist_ok=True)
 
           EN_TO_BN=str.maketrans("0123456789","০১২৩৪৫৬৭৮৯")
-          BN_TO_EN=str.maketrans("০১২৩৪৫৬৭৮৯","0123456789")
           def to_bangla_num(s): return str(s).translate(EN_TO_BN)
           def extract_number(s):
-              s=str(s).translate(BN_TO_EN)
+              s=str(s).translate(str.maketrans("০১২৩৪৫৬৭৮৯","0123456789"))
               m=re.search(r'\d+',s)
               return int(m.group()) if m else 0
           def clean_name(text):
               text = re.sub(r'\s*\(\s*[0-9০-৯]+\s*\)', '', text)
               return re.sub(r'\s{2,}', ' ', text).strip()
-
-          def clean_arabic_text(text):
-              # Remove all ayah number circles and symbols: ﴿ ﴾ ۝ ۛ ۚ ۙ etc and digits
-              # Keep Arabic letters and waqf signs like لا but attach it
-              text = re.sub(r'[﴿﴾۝\d٠-٩0-9]+', '', text)
-              # Remove extra small stop symbols isolated - keep لا inside
-              text = re.sub(r'\s*[ۛۚۙۗۘ]+\s*', ' ', text)
-              text = re.sub(r'\s{2,}', ' ', text).strip()
-              return text
-
-          def get_arabic_display(text):
-              try:
-                  reshaped = arabic_reshaper.reshape(text)
-                  return get_display(reshaped)
-              except:
-                  return text
 
           W,H=3840,2160
           bg_img=Image.open(BG).convert("RGB") if os.path.exists(BG) else Image.new("RGB",(W,H),(232,236,244))
@@ -82,6 +64,7 @@ jobs:
 
           LEFT_W=int(W*0.22)
           SCALE=W/1280
+          print(f"BG Size: {W}x{H}, SCALE: {SCALE}, LEFT_W: {LEFT_W}")
 
           def get_font_by_size(is_ar, px_size):
               p=FONT_AR if is_ar else FONT_BN
@@ -93,26 +76,27 @@ jobs:
           with open(DATA, encoding="utf-8") as f:
               data=json.load(f)
 
-          # FIXED: Use constants, never mutate globally
-          CONST_SURA=40
-          CONST_DETAILS=68
-          CONST_KANZUL=42
-          CONST_BN=52
-          CONST_AR=80
+          BASE_SURA=40
+          BASE_DETAILS_AR=68
+          BASE_DETAILS_BN=68
+          BASE_KANZUL=42
+          BASE_BN=52
+          BASE_AR=80
 
           SURA_Y=int(300*SCALE)
-          AYAT_Y=SURA_Y + int(CONST_SURA*SCALE*1.6)
-          LINE_Y=AYAT_Y + int(CONST_SURA*SCALE*1.6)
+          AYAT_Y=SURA_Y + int(BASE_SURA*SCALE*1.6)
+          LINE_Y=AYAT_Y + int(BASE_SURA*SCALE*1.6)
+
           BOTTOM_MARGIN_DP = 5
           BOTTOM_MARGIN = int(BOTTOM_MARGIN_DP * SCALE)
           TOP_MARGIN = int(120*SCALE)
+
           SIDE_MARGIN=int(30*SCALE)
           AVAIL_W_NAMES = LEFT_W - 2*SIDE_MARGIN
           DETAILS_FLOOR=32
           GAP_Y_DETAILS=int(22*SCALE)
 
           _dummy_draw=ImageDraw.Draw(Image.new("RGB",(10,10)))
-          # Calculate details font size once
           temp_DET=72
           while True:
               f_ar_det=get_font_by_size(True, temp_DET*SCALE)
@@ -120,11 +104,21 @@ jobs:
               AR_NAME_W=_dummy_draw.textlength(AR_NAME, font=f_ar_det)
               BN_NAME_W=_dummy_draw.textlength(BN_NAME, font=f_bn_det)
               if max(AR_NAME_W, BN_NAME_W) <= AVAIL_W_NAMES or temp_DET <= DETAILS_FLOOR:
-                  final_details_size=temp_DET
+                  BASE_DETAILS_AR=temp_DET
+                  BASE_DETAILS_BN=temp_DET
                   break
               temp_DET -= 2
 
           NAMES_Y = LINE_Y + int(55*SCALE)
+
+          def draw_label_colon(draw, x, y, label, value, font, fill):
+              draw.text((x, y), label, font=font, fill=fill)
+              label_w = draw.textlength(label, font=font)
+              colon_up = int(font.size * 0.12)
+              draw.text((x+label_w, y-colon_up), ":", font=font, fill=fill)
+              colon_w = draw.textlength(":", font=font)
+              if value:
+                  draw.text((x+label_w+colon_w, y), " "+value, font=font, fill=fill)
 
           def draw_centered_label_colon(draw, y, label, value, font, fill):
               label_w = draw.textlength(label, font=font)
@@ -138,15 +132,6 @@ jobs:
               if value:
                   draw.text((start_x+label_w+colon_w, y), " "+value, font=font, fill=fill)
 
-          def draw_label_colon(draw, x, y, label, value, font, fill):
-              draw.text((x, y), label, font=font, fill=fill)
-              label_w = draw.textlength(label, font=font)
-              colon_up = int(font.size * 0.12)
-              draw.text((x+label_w, y-colon_up), ":", font=font, fill=fill)
-              colon_w = draw.textlength(":", font=font)
-              if value:
-                  draw.text((x+label_w+colon_w, y), " "+value, font=font, fill=fill)
-
           for item in data:
               sura_int=extract_number(item.get('sura','0'))
               ayat_int=extract_number(item.get('verses','0'))
@@ -155,10 +140,6 @@ jobs:
               def disp(n): return f"0{n}" if n<10 else str(n)
               sura_disp=to_bangla_num(disp(sura_int))
               ayat_disp=to_bangla_num(disp(ayat_int))
-
-              # FIXED: Reset per image - never reuse mutated base
-              cur_AR = CONST_AR
-              cur_BN = CONST_BN
 
               bg=bg_img.resize((W,H), Image.LANCZOS)
               draw=ImageDraw.Draw(bg)
@@ -172,36 +153,31 @@ jobs:
                       bg.paste(logo,(int((LEFT_W-ls)//2), int(30*SCALE)), logo)
                   except: pass
 
-              f_sura=get_font(False, CONST_SURA)
-              f_kanzul=get_font(False, CONST_KANZUL)
+              f_sura=get_font(False, BASE_SURA)
+              f_kanzul=get_font(False, BASE_KANZUL)
               max_w=W-LEFT_W-int(140*SCALE)
 
-              # FIXED: Clean arabic and separate number
-              arabic_cleaned = clean_arabic_text(item.get('names','').strip())
-              arabic_display = get_arabic_display(arabic_cleaned)
-
-              # Calculate arabic lines with fixed logic
+              temp_AR = BASE_AR
               while True:
-                  f_ar=get_font(True, cur_AR)
+                  f_ar=get_font(True, temp_AR)
+                  arabic_raw=item.get('names','').strip()
                   arabic_lines=[]
                   cur=""
-                  for w in arabic_cleaned.split():
+                  for w in arabic_raw.split():
                       test=f"{cur} {w}".strip()
-                      # Use reshaped for measurement
-                      test_disp = get_arabic_display(test)
-                      if draw.textlength(test_disp, font=f_ar) <= max_w:
+                      if draw.textlength(test, font=f_ar) <= max_w:
                           cur=test
                       else:
                           if cur: arabic_lines.append(cur)
                           cur=w
                   if cur: arabic_lines.append(cur)
-                  ar_block_h = len(arabic_lines) * int(cur_AR*SCALE*1.5)
-                  if ar_block_h <= (H - int(200*SCALE)) * 0.55 or cur_AR <= 50:
+                  ar_block_h = len(arabic_lines) * int(temp_AR*SCALE*1.5)
+                  if ar_block_h <= (H - int(200*SCALE)) * 0.55 or temp_AR <= 50:
+                      BASE_AR = temp_AR
                       break
-                  cur_AR -= 2
+                  temp_AR -= 2
 
-              # FIXED: Bangla wrap with fresh variable
-              temp_BN = cur_BN
+              temp_BN = BASE_BN
               while True:
                   f_bn=get_font(False, temp_BN)
                   cleaned=clean_name(item.get('name',''))
@@ -215,19 +191,18 @@ jobs:
                           if cur: bn_lines.append(cur)
                           cur=w
                   if cur: bn_lines.append(cur)
-                  needed = len(arabic_lines)*int(cur_AR*SCALE*1.5) + int(50*SCALE) + int(75*SCALE) + len(bn_lines)*int(temp_BN*SCALE*1.45)
+                  needed = len(arabic_lines)*int(BASE_AR*SCALE*1.5) + int(50*SCALE) + int(75*SCALE) + len(bn_lines)*int(temp_BN*SCALE*1.45)
                   if needed < H - TOP_MARGIN - BOTTOM_MARGIN or temp_BN <= 30:
-                      cur_BN = temp_BN
+                      BASE_BN = temp_BN
                       break
                   temp_BN -= 2
 
-              f_bn=get_font(False, cur_BN)
-              f_ar=get_font(True, cur_AR)
+              f_bn=get_font(False, BASE_BN)
 
-              arabic_block_h = len(arabic_lines) * int(cur_AR*SCALE*1.5)
+              arabic_block_h = len(arabic_lines) * int(BASE_AR*SCALE*1.5)
               gap_after_arabic = int(50*SCALE)
               kanzul_block_h = int(75*SCALE)
-              bn_block_h = len(bn_lines) * int(cur_BN*SCALE*1.4)
+              bn_block_h = len(bn_lines) * int(BASE_BN*SCALE*1.4)
               total_block_h = arabic_block_h + gap_after_arabic + kanzul_block_h + bn_block_h
 
               start_y = max(TOP_MARGIN, (H - total_block_h - BOTTOM_MARGIN) // 2)
@@ -238,56 +213,22 @@ jobs:
               draw_centered_label_colon(draw, AYAT_Y, "আয়াত", ayat_disp, f_sura, (0,0,0))
               draw.line([(int(40*SCALE), LINE_Y), (int(LEFT_W-40*SCALE), LINE_Y)], fill=(100,100,120), width=2)
 
-              f_ar_det=get_font_by_size(True, final_details_size*SCALE)
-              f_bn_det=get_font_by_size(False, final_details_size*SCALE)
+              f_ar_det=get_font_by_size(True, BASE_DETAILS_AR*SCALE)
+              f_bn_det=get_font_by_size(False, BASE_DETAILS_BN*SCALE)
               ar_w = draw.textlength(AR_NAME, font=f_ar_det)
               bn_w = draw.textlength(BN_NAME, font=f_bn_det)
               ar_x = (LEFT_W - ar_w)//2
               bn_x = (LEFT_W - bn_w)//2
               dy = NAMES_Y
               draw.text((ar_x, dy), AR_NAME, font=f_ar_det, fill=(20,20,60))
-              dy += int(final_details_size*SCALE*1.6) + GAP_Y_DETAILS
+              dy += int(BASE_DETAILS_AR*SCALE*1.6) + GAP_Y_DETAILS
               draw.text((bn_x, dy), BN_NAME, font=f_bn_det, fill=(20,20,60))
 
               y=start_y
-              # Draw Arabic lines
-              for idx, line in enumerate(arabic_lines):
-                  line_disp = get_arabic_display(line)
-                  w=draw.textlength(line_disp, font=f_ar)
-                  x_pos = W-int(70*SCALE)-w
-                  draw.text((x_pos, y), line_disp, font=f_ar, fill=(0,0,0))
-
-                  # FIXED: Draw ayah number circle only on last line, left side (end of ayah)
-                  if idx == len(arabic_lines)-1:
-                      # Draw number in decorative circle at end
-                      ayah_num_ar = str(ayat_int) # use arabic-indic if you want: to_bangla? but keep english for font
-                      # Convert to Arabic-Indic digits ٠١٢
-                      ar_digits = str(ayat_int).translate(str.maketrans("0123456789","٠١٢٣٤٥٦٧٨٩"))
-                      num_text = f"﴿{ar_digits}﴾"
-                      num_disp = get_arabic_display(num_text)
-                      # Draw on left side of last line
-                      num_w = draw.textlength(num_disp, font=f_ar)
-                      # Position: left of the content area, not overlapping
-                      num_x = LEFT_W + int(50*SCALE)
-                      # If last line is long, put number below line centered left
-                      if x_pos < LEFT_W + int(200*SCALE):
-                          # move to next line for number
-                          pass
-                      else:
-                          draw.text((num_x, y), num_disp, font=f_ar, fill=(0,0,0))
-                  y+=int(cur_AR*SCALE*1.5)
-
-              # If last line was too long, draw number on new line
-              if len(arabic_lines) > 0:
-                  last_line = get_arabic_display(arabic_lines[-1])
-                  last_w = draw.textlength(last_line, font=f_ar)
-                  last_x = W-int(70*SCALE)-last_w
-                  if last_x < LEFT_W + int(200*SCALE):
-                      ar_digits = str(ayat_int).translate(str.maketrans("0123456789","٠١٢٣٤٥٦٧٨٩"))
-                      num_text = f"﴿{ar_digits}﴾"
-                      num_disp = get_arabic_display(num_text)
-                      draw.text((LEFT_W + int(50*SCALE), y), num_disp, font=f_ar, fill=(0,0,0))
-                      y+=int(cur_AR*SCALE*1.5)
+              for line in arabic_lines:
+                  w=draw.textlength(line, font=f_ar)
+                  draw.text((W-int(70*SCALE)-w, y), line, font=f_ar, fill=(0,0,0))
+                  y+=int(BASE_AR*SCALE*1.5)
 
               y+=int(50*SCALE)
               draw_label_colon(draw, LEFT_W+int(50*SCALE), y, "কানযুল ঈমান থেকে অনুবাদ", "", f_kanzul, (20,40,120))
@@ -309,10 +250,10 @@ jobs:
                           draw.text((LEFT_W+int(50*SCALE), y), line, font=f_bn, fill=(15,25,85))
                   else:
                       draw.text((LEFT_W+int(50*SCALE), y), line, font=f_bn, fill=(15,25,85))
-                  y+=int(cur_BN*SCALE*1.4)
+                  y+=int(BASE_BN*SCALE*1.4)
 
               bg.save(os.path.join(OUT, filename), "JPEG", quality=95, subsampling=0)
-              print(f"Done {filename} AR {cur_AR} BN {cur_BN} start_y={start_y}")
+              print(f"Done {filename} with AR {BASE_AR}dp, BN {BASE_BN}dp, start_y={start_y}")
 
           PY
 
@@ -328,5 +269,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -f output/
-          git commit -m "fix: ayah number circle consistent + font reset bug" || echo "no changes"
+          git commit -m "center sura ayat + bottom margin 5dp" || echo "no changes"
           git push
