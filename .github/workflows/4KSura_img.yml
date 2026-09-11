@@ -1,4 +1,4 @@
-name: Generate Ayah Images
+name: Generate Ayah Images Rizwan4K
 
 on:
   workflow_dispatch:
