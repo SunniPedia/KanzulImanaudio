@@ -1,4 +1,4 @@
-name: Generate Ayah Images Rizwan4K
+name: Generate Ayah Images
 
 on:
   workflow_dispatch:
@@ -45,7 +45,6 @@ jobs:
 
           AR_NAME=normalize_arabic_display(os.environ.get("ARABIC_NAME","").strip())
           BN_NAME=os.environ.get("BANGLA_NAME","").strip()
-          print(f"ARABIC_NAME={AR_NAME!r}, BANGLA_NAME={BN_NAME!r}")
 
           if os.path.exists(OUT):
               shutil.rmtree(OUT)
@@ -61,7 +60,7 @@ jobs:
               text = re.sub(r'\s*\(\s*[0-9০-৯]+\s*\)', '', text)
               return re.sub(r'\s{2,}', ' ', text).strip()
 
-          # ---- Background handling rule: TARGET_W = 3840 fixed ----
+          # ---- Background: TARGET_W 3840 fixed ----
           TARGET_W = 3840
           if os.path.exists(BG):
               _bg_raw = Image.open(BG).convert("RGB")
@@ -72,10 +71,9 @@ jobs:
               _resize_ratio = TARGET_W / _bg_raw.width
               _new_h = round(_bg_raw.height * _resize_ratio)
               orig_bg = _bg_raw.resize((TARGET_W, _new_h), Image.LANCZOS)
-              print(f"[INFO] background.jpg width {_bg_raw.width} → {TARGET_W} e normalize kora holo (height {_bg_raw.height} → {_new_h})")
+              print(f"[INFO] background.jpg width {_bg_raw.width} → {TARGET_W} e normalize")
           else:
               orig_bg = _bg_raw
-              print(f"[INFO] background.jpg width already {TARGET_W}")
 
           W = TARGET_W
           BASE_W, BASE_H = orig_bg.size
@@ -86,14 +84,11 @@ jobs:
               canvas = Image.new("RGB", (W, target_h), (232,236,244))
               canvas.paste(orig_bg, (0,0))
               strip = orig_bg.crop((0, BASE_H-10, W, BASE_H))
-              extend_h = target_h - BASE_H
-              stretched_strip = strip.resize((W, extend_h), Image.LANCZOS)
-              canvas.paste(stretched_strip, (0, BASE_H))
+              canvas.paste(strip.resize((W, target_h - BASE_H), Image.LANCZOS), (0, BASE_H))
               return canvas
 
           LEFT_W=int(W*0.22)
           SCALE=W/1280
-          print(f"BG Size: {W}x{BASE_H}, SCALE: {SCALE}, LEFT_W: {LEFT_W}")
 
           def get_font_by_size(is_ar, px_size):
               p=FONT_AR if is_ar else FONT_BN
@@ -105,7 +100,6 @@ jobs:
           with open(DATA, encoding="utf-8") as f:
               data=json.load(f)
 
-          # Fixed fonts for ayat
           BASE_SURA=40
           BASE_KANZUL=42
           BASE_BN=52
@@ -118,31 +112,41 @@ jobs:
           BOTTOM_MARGIN = int(5 * SCALE)
           TOP_MARGIN = int(120*SCALE)
 
-          # Only details name auto-shrink to fit left panel
+          # ---- আলাদা আলাদা shrink logic ----
           SIDE_MARGIN=int(30*SCALE)
           AVAIL_W_NAMES = LEFT_W - 2*SIDE_MARGIN
           DETAILS_FLOOR=32
           GAP_Y_DETAILS=int(22*SCALE)
           _dummy_draw=ImageDraw.Draw(Image.new("RGB",(10,10)))
-          temp_DET=72
-          BASE_DETAILS_AR=68
-          BASE_DETAILS_BN=68
+
+          # আরবি নামের জন্য আলাদা
+          temp_AR = 72
+          BASE_DETAILS_AR = 68
           while True:
-              f_ar_det=get_font_by_size(True, temp_DET*SCALE)
-              f_bn_det=get_font_by_size(False, temp_DET*SCALE)
+              f_ar_det=get_font_by_size(True, temp_AR*SCALE)
               AR_NAME_W=_dummy_draw.textlength(AR_NAME, font=f_ar_det)
-              BN_NAME_W=_dummy_draw.textlength(BN_NAME, font=f_bn_det)
-              if max(AR_NAME_W, BN_NAME_W) <= AVAIL_W_NAMES or temp_DET <= DETAILS_FLOOR:
-                  BASE_DETAILS_AR=temp_DET
-                  BASE_DETAILS_BN=temp_DET
+              if AR_NAME_W <= AVAIL_W_NAMES or temp_AR <= DETAILS_FLOOR:
+                  BASE_DETAILS_AR=temp_AR
                   break
-              temp_DET -= 2
+              temp_AR -= 2
+
+          # বাংলা নামের জন্য আলাদা
+          temp_BN = 72
+          BASE_DETAILS_BN = 68
+          while True:
+              f_bn_det=get_font_by_size(False, temp_BN*SCALE)
+              BN_NAME_W=_dummy_draw.textlength(BN_NAME, font=f_bn_det)
+              if BN_NAME_W <= AVAIL_W_NAMES or temp_BN <= DETAILS_FLOOR:
+                  BASE_DETAILS_BN=temp_BN
+                  break
+              temp_BN -= 2
+
+          print(f"Details font -> AR: {BASE_DETAILS_AR} (for {AR_NAME}), BN: {BASE_DETAILS_BN} (for {BN_NAME})")
 
           def disp(n):
               if n == 0: return "0"
               return f"0{n}" if n < 10 else str(n)
 
-          # Sundor format: সূরা : ১১৩ (colon er age-pore space)
           def draw_centered_label_colon(draw, y, label, value, font, fill):
               full_text = f"{label} : {value}" if value else f"{label} :"
               total_w = draw.textlength(full_text, font=font)
@@ -171,8 +175,7 @@ jobs:
               _calc_draw = ImageDraw.Draw(Image.new("RGB",(10,10)))
 
               arabic_raw=normalize_arabic_display(item.get('names','').strip())
-              arabic_lines=[]
-              cur=""
+              arabic_lines=[]; cur=""
               for w in arabic_raw.split():
                   test=f"{cur} {w}".strip()
                   if _calc_draw.textlength(test, font=f_ar) <= max_w:
@@ -183,8 +186,7 @@ jobs:
               if cur: arabic_lines.append(cur)
 
               cleaned=clean_name(item.get('name',''))
-              bn_lines=[]
-              cur=""
+              bn_lines=[]; cur=""
               for w in cleaned.split():
                   test=f"{cur} {w}".strip()
                   if _calc_draw.textlength(test, font=f_bn) <= max_w:
@@ -253,7 +255,7 @@ jobs:
                   y+=int(BASE_BN*SCALE*1.4)
 
               bg.save(os.path.join(OUT, filename), "JPEG", quality=95, subsampling=0)
-              print(f"Done {filename} | W={W} H={H} (BASE_H={BASE_H}) | {AR_NAME} - {BN_NAME}")
+              print(f"Done {filename} | W={W} H={H} | AR font {BASE_DETAILS_AR} BN font {BASE_DETAILS_BN}")
 
           PY
 
@@ -269,5 +271,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -f output/
-          git commit -m "fix: width 3840 lock + fixed ayat font 80/52 + details auto-shrink + sundor colon format" || echo "no changes"
+          git commit -m "fix: separate shrink for ar and bn details names + width 3840 lock" || echo "no changes"
           git push
