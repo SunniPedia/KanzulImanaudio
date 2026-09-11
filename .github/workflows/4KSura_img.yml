@@ -1,4 +1,4 @@
-name: Generate Ayah Images 4K
+name: Generate Ayah Images
 
 on:
   workflow_dispatch:
@@ -71,7 +71,7 @@ jobs:
               _resize_ratio = TARGET_W / _bg_raw.width
               _new_h = round(_bg_raw.height * _resize_ratio)
               orig_bg = _bg_raw.resize((TARGET_W, _new_h), Image.LANCZOS)
-              print(f"[INFO] background.jpg width {_bg_raw.width} → {TARGET_W} e normalize kora holo")
+              print(f"[INFO] background.jpg width {_bg_raw.width} → {TARGET_W} e normalize")
           else:
               orig_bg = _bg_raw
 
@@ -84,8 +84,7 @@ jobs:
               canvas = Image.new("RGB", (W, target_h), (232,236,244))
               canvas.paste(orig_bg, (0,0))
               strip = orig_bg.crop((0, BASE_H-10, W, BASE_H))
-              stretched_strip = strip.resize((W, target_h - BASE_H), Image.LANCZOS)
-              canvas.paste(stretched_strip, (0, BASE_H))
+              canvas.paste(strip.resize((W, target_h - BASE_H), Image.LANCZOS), (0, BASE_H))
               return canvas
 
           LEFT_W=int(W*0.22)
@@ -101,21 +100,40 @@ jobs:
           with open(DATA, encoding="utf-8") as f:
               data=json.load(f)
 
-          # ---- FIXED FONT, NO SHRINK ----
+          # ---- FIXED FONT FOR AYAT ----
           BASE_SURA=40
           BASE_KANZUL=42
           BASE_BN=52
           BASE_AR=80
-          BASE_DETAILS_AR=68
-          BASE_DETAILS_BN=60
 
           SURA_Y=int(300*SCALE)
           AYAT_Y=SURA_Y + int(BASE_SURA*SCALE*1.6)
           LINE_Y=AYAT_Y + int(BASE_SURA*SCALE*1.6)
           LINE_Y_NO_AYAT=SURA_Y + int(BASE_SURA*SCALE*1.6)
-
           BOTTOM_MARGIN = int(5 * SCALE)
           TOP_MARGIN = int(120*SCALE)
+
+          # ---- ONLY DETAILS NAME WILL AUTO-SHRINK ----
+          SIDE_MARGIN=int(30*SCALE)
+          AVAIL_W_NAMES = LEFT_W - 2*SIDE_MARGIN
+          DETAILS_FLOOR=32
+          GAP_Y_DETAILS=int(22*SCALE)
+          _dummy_draw=ImageDraw.Draw(Image.new("RGB",(10,10)))
+
+          temp_DET=72
+          BASE_DETAILS_AR=68
+          BASE_DETAILS_BN=68
+          while True:
+              f_ar_det=get_font_by_size(True, temp_DET*SCALE)
+              f_bn_det=get_font_by_size(False, temp_DET*SCALE)
+              AR_NAME_W=_dummy_draw.textlength(AR_NAME, font=f_ar_det)
+              BN_NAME_W=_dummy_draw.textlength(BN_NAME, font=f_bn_det)
+              if max(AR_NAME_W, BN_NAME_W) <= AVAIL_W_NAMES or temp_DET <= DETAILS_FLOOR:
+                  BASE_DETAILS_AR=temp_DET
+                  BASE_DETAILS_BN=temp_DET
+                  break
+              temp_DET -= 2
+          print(f"Details font auto-adjusted to {BASE_DETAILS_AR} for {AR_NAME}/{BN_NAME}")
 
           def disp(n):
               if n == 0: return "0"
@@ -130,7 +148,6 @@ jobs:
               show_ayat = ayat_int!= 0
               line_y = LINE_Y if show_ayat else LINE_Y_NO_AYAT
 
-              # Fixed font
               f_ar = get_font(True, BASE_AR)
               f_bn = get_font(False, BASE_BN)
               f_sura=get_font(False, BASE_SURA)
@@ -139,10 +156,8 @@ jobs:
               max_w=W-LEFT_W-int(140*SCALE)
               _calc_draw = ImageDraw.Draw(Image.new("RGB",(10,10)))
 
-              # Line wrap with fixed font
               arabic_raw=normalize_arabic_display(item.get('names','').strip())
-              arabic_lines=[]
-              cur=""
+              arabic_lines=[]; cur=""
               for w in arabic_raw.split():
                   test=f"{cur} {w}".strip()
                   if _calc_draw.textlength(test, font=f_ar) <= max_w:
@@ -153,8 +168,7 @@ jobs:
               if cur: arabic_lines.append(cur)
 
               cleaned=clean_name(item.get('name',''))
-              bn_lines=[]
-              cur=""
+              bn_lines=[]; cur=""
               for w in cleaned.split():
                   test=f"{cur} {w}".strip()
                   if _calc_draw.textlength(test, font=f_bn) <= max_w:
@@ -164,7 +178,6 @@ jobs:
                       cur=w
               if cur: bn_lines.append(cur)
 
-              # Height calculation with fixed font
               total_block_h = len(arabic_lines)*int(BASE_AR*SCALE*1.5) + int(50*SCALE) + int(75*SCALE) + len(bn_lines)*int(BASE_BN*SCALE*1.4)
               required_H = total_block_h + TOP_MARGIN + BOTTOM_MARGIN + int(300*SCALE)
               H = max(BASE_H, required_H)
@@ -183,7 +196,6 @@ jobs:
 
               start_y = max(TOP_MARGIN, (H - total_block_h - BOTTOM_MARGIN)//2)
 
-              # Sura/Ayat labels
               def draw_centered_label_colon(draw, y, label, value, font, fill):
                   label_w = draw.textlength(label, font=font)
                   colon_w = draw.textlength(":", font=font)
@@ -211,7 +223,7 @@ jobs:
               f_ar_det=get_font_by_size(True, BASE_DETAILS_AR*SCALE)
               f_bn_det=get_font_by_size(False, BASE_DETAILS_BN*SCALE)
               draw.text(((LEFT_W - draw.textlength(AR_NAME, font=f_ar_det))//2, line_y + int(55*SCALE)), AR_NAME, font=f_ar_det, fill=(20,20,60))
-              draw.text(((LEFT_W - draw.textlength(BN_NAME, font=f_bn_det))//2, line_y + int(55*SCALE) + int(BASE_DETAILS_AR*SCALE*1.6) + int(22*SCALE)), BN_NAME, font=f_bn_det, fill=(20,20,60))
+              draw.text(((LEFT_W - draw.textlength(BN_NAME, font=f_bn_det))//2, line_y + int(55*SCALE) + int(BASE_DETAILS_AR*SCALE*1.6) + GAP_Y_DETAILS), BN_NAME, font=f_bn_det, fill=(20,20,60))
 
               y=start_y
               for line in arabic_lines:
@@ -226,7 +238,7 @@ jobs:
                   y+=int(BASE_BN*SCALE*1.4)
 
               bg.save(os.path.join(OUT, filename), "JPEG", quality=95, subsampling=0)
-              print(f"Done {filename} | W={W} H={H} (BASE_H={BASE_H}) Fixed Font")
+              print(f"Done {filename} | W={W} H={H}")
 
           PY
 
@@ -242,5 +254,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -f output/
-          git commit -m "fix: fixed font, only height grows" || echo "no changes"
+          git commit -m "fix: fixed ayat font, only details name auto-shrink + width 3840 lock" || echo "no changes"
           git push
