@@ -107,7 +107,7 @@ jobs:
           BASE_BN=52
           BASE_AR=80
           BASE_DETAILS_AR=68
-          BASE_DETAILS_BN=68
+          BASE_DETAILS_BN=60
 
           SURA_Y=int(300*SCALE)
           AYAT_Y=SURA_Y + int(BASE_SURA*SCALE*1.6)
