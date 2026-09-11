@@ -1,4 +1,4 @@
-name: Generate Ayah Images
+name: Generate Ayah Images Rizwan4K
 
 on:
   workflow_dispatch:
@@ -45,6 +45,7 @@ jobs:
 
           AR_NAME=normalize_arabic_display(os.environ.get("ARABIC_NAME","").strip())
           BN_NAME=os.environ.get("BANGLA_NAME","").strip()
+          print(f"ARABIC_NAME={AR_NAME!r}, BANGLA_NAME={BN_NAME!r}")
 
           if os.path.exists(OUT):
               shutil.rmtree(OUT)
@@ -60,7 +61,7 @@ jobs:
               text = re.sub(r'\s*\(\s*[0-9০-৯]+\s*\)', '', text)
               return re.sub(r'\s{2,}', ' ', text).strip()
 
-          # ---- Background handling rule ----
+          # ---- Background handling rule: TARGET_W = 3840 fixed ----
           TARGET_W = 3840
           if os.path.exists(BG):
               _bg_raw = Image.open(BG).convert("RGB")
@@ -71,9 +72,10 @@ jobs:
               _resize_ratio = TARGET_W / _bg_raw.width
               _new_h = round(_bg_raw.height * _resize_ratio)
               orig_bg = _bg_raw.resize((TARGET_W, _new_h), Image.LANCZOS)
-              print(f"[INFO] background.jpg width {_bg_raw.width} → {TARGET_W} e normalize")
+              print(f"[INFO] background.jpg width {_bg_raw.width} → {TARGET_W} e normalize kora holo (height {_bg_raw.height} → {_new_h})")
           else:
               orig_bg = _bg_raw
+              print(f"[INFO] background.jpg width already {TARGET_W}")
 
           W = TARGET_W
           BASE_W, BASE_H = orig_bg.size
@@ -84,11 +86,14 @@ jobs:
               canvas = Image.new("RGB", (W, target_h), (232,236,244))
               canvas.paste(orig_bg, (0,0))
               strip = orig_bg.crop((0, BASE_H-10, W, BASE_H))
-              canvas.paste(strip.resize((W, target_h - BASE_H), Image.LANCZOS), (0, BASE_H))
+              extend_h = target_h - BASE_H
+              stretched_strip = strip.resize((W, extend_h), Image.LANCZOS)
+              canvas.paste(stretched_strip, (0, BASE_H))
               return canvas
 
           LEFT_W=int(W*0.22)
           SCALE=W/1280
+          print(f"BG Size: {W}x{BASE_H}, SCALE: {SCALE}, LEFT_W: {LEFT_W}")
 
           def get_font_by_size(is_ar, px_size):
               p=FONT_AR if is_ar else FONT_BN
@@ -100,7 +105,7 @@ jobs:
           with open(DATA, encoding="utf-8") as f:
               data=json.load(f)
 
-          # ---- FIXED FONT FOR AYAT ----
+          # Fixed fonts for ayat
           BASE_SURA=40
           BASE_KANZUL=42
           BASE_BN=52
@@ -113,13 +118,12 @@ jobs:
           BOTTOM_MARGIN = int(5 * SCALE)
           TOP_MARGIN = int(120*SCALE)
 
-          # ---- ONLY DETAILS NAME WILL AUTO-SHRINK ----
+          # Only details name auto-shrink to fit left panel
           SIDE_MARGIN=int(30*SCALE)
           AVAIL_W_NAMES = LEFT_W - 2*SIDE_MARGIN
           DETAILS_FLOOR=32
           GAP_Y_DETAILS=int(22*SCALE)
           _dummy_draw=ImageDraw.Draw(Image.new("RGB",(10,10)))
-
           temp_DET=72
           BASE_DETAILS_AR=68
           BASE_DETAILS_BN=68
@@ -133,11 +137,21 @@ jobs:
                   BASE_DETAILS_BN=temp_DET
                   break
               temp_DET -= 2
-          print(f"Details font auto-adjusted to {BASE_DETAILS_AR} for {AR_NAME}/{BN_NAME}")
 
           def disp(n):
               if n == 0: return "0"
               return f"0{n}" if n < 10 else str(n)
+
+          # Sundor format: সূরা : ১১৩ (colon er age-pore space)
+          def draw_centered_label_colon(draw, y, label, value, font, fill):
+              full_text = f"{label} : {value}" if value else f"{label} :"
+              total_w = draw.textlength(full_text, font=font)
+              start_x = (LEFT_W - total_w)//2
+              draw.text((start_x, y), full_text, font=font, fill=fill)
+
+          def draw_label_colon(draw, x, y, label, value, font, fill):
+              full_text = f"{label} : {value}" if value else f"{label} :"
+              draw.text((x, y), full_text, font=font, fill=fill)
 
           for item in data:
               sura_int=extract_number(item.get('sura','0'))
@@ -147,17 +161,18 @@ jobs:
               ayat_disp=to_bangla_num(disp(ayat_int))
               show_ayat = ayat_int!= 0
               line_y = LINE_Y if show_ayat else LINE_Y_NO_AYAT
+              names_y = line_y + int(55*SCALE)
 
               f_ar = get_font(True, BASE_AR)
               f_bn = get_font(False, BASE_BN)
               f_sura=get_font(False, BASE_SURA)
               f_kanzul=get_font(False, BASE_KANZUL)
-
               max_w=W-LEFT_W-int(140*SCALE)
               _calc_draw = ImageDraw.Draw(Image.new("RGB",(10,10)))
 
               arabic_raw=normalize_arabic_display(item.get('names','').strip())
-              arabic_lines=[]; cur=""
+              arabic_lines=[]
+              cur=""
               for w in arabic_raw.split():
                   test=f"{cur} {w}".strip()
                   if _calc_draw.textlength(test, font=f_ar) <= max_w:
@@ -168,7 +183,8 @@ jobs:
               if cur: arabic_lines.append(cur)
 
               cleaned=clean_name(item.get('name',''))
-              bn_lines=[]; cur=""
+              bn_lines=[]
+              cur=""
               for w in cleaned.split():
                   test=f"{cur} {w}".strip()
                   if _calc_draw.textlength(test, font=f_bn) <= max_w:
@@ -196,25 +212,6 @@ jobs:
 
               start_y = max(TOP_MARGIN, (H - total_block_h - BOTTOM_MARGIN)//2)
 
-              def draw_centered_label_colon(draw, y, label, value, font, fill):
-                  label_w = draw.textlength(label, font=font)
-                  colon_w = draw.textlength(":", font=font)
-                  value_w = draw.textlength(" "+value, font=font) if value else 0
-                  total_w = label_w + colon_w + value_w
-                  start_x = (LEFT_W - total_w)//2
-                  draw.text((start_x, y), label, font=font, fill=fill)
-                  draw.text((start_x+label_w, y-int(font.size*0.12)), ":", font=font, fill=fill)
-                  if value:
-                      draw.text((start_x+label_w+colon_w, y), " "+value, font=font, fill=fill)
-
-              def draw_label_colon(draw, x, y, label, value, font, fill):
-                  draw.text((x, y), label, font=font, fill=fill)
-                  label_w = draw.textlength(label, font=font)
-                  draw.text((x+label_w, y-int(font.size*0.12)), ":", font=font, fill=fill)
-                  colon_w = draw.textlength(":", font=font)
-                  if value:
-                      draw.text((x+label_w+colon_w, y), " "+value, font=font, fill=fill)
-
               draw_centered_label_colon(draw, SURA_Y, "সূরা", sura_disp, f_sura, (0,0,0))
               if show_ayat:
                   draw_centered_label_colon(draw, AYAT_Y, "আয়াত", ayat_disp, f_sura, (0,0,0))
@@ -222,23 +219,41 @@ jobs:
 
               f_ar_det=get_font_by_size(True, BASE_DETAILS_AR*SCALE)
               f_bn_det=get_font_by_size(False, BASE_DETAILS_BN*SCALE)
-              draw.text(((LEFT_W - draw.textlength(AR_NAME, font=f_ar_det))//2, line_y + int(55*SCALE)), AR_NAME, font=f_ar_det, fill=(20,20,60))
-              draw.text(((LEFT_W - draw.textlength(BN_NAME, font=f_bn_det))//2, line_y + int(55*SCALE) + int(BASE_DETAILS_AR*SCALE*1.6) + GAP_Y_DETAILS), BN_NAME, font=f_bn_det, fill=(20,20,60))
+              ar_w = draw.textlength(AR_NAME, font=f_ar_det)
+              bn_w = draw.textlength(BN_NAME, font=f_bn_det)
+              draw.text(((LEFT_W - ar_w)//2, names_y), AR_NAME, font=f_ar_det, fill=(20,20,60))
+              draw.text(((LEFT_W - bn_w)//2, names_y + int(BASE_DETAILS_AR*SCALE*1.6) + GAP_Y_DETAILS), BN_NAME, font=f_bn_det, fill=(20,20,60))
 
               y=start_y
               for line in arabic_lines:
                   w=draw.textlength(line, font=f_ar)
                   draw.text((W-int(70*SCALE)-w, y), line, font=f_ar, fill=(0,0,0))
                   y+=int(BASE_AR*SCALE*1.5)
+
               y+=int(50*SCALE)
               draw_label_colon(draw, LEFT_W+int(50*SCALE), y, "কানযুল ঈমান থেকে অনুবাদ", "", f_kanzul, (20,40,120))
               y+=int(75*SCALE)
-              for line in bn_lines:
-                  draw.text((LEFT_W+int(50*SCALE), y), line, font=f_bn, fill=(15,25,85))
+
+              for i,line in enumerate(bn_lines):
+                  words=line.split()
+                  is_last=i==len(bn_lines)-1
+                  if not is_last and len(words)>1:
+                      base_w=sum(draw.textlength(w, font=f_bn) for w in words) + draw.textlength(" ", font=f_bn)*(len(words)-1)
+                      extra=max_w-base_w
+                      gap=extra/(len(words)-1) if len(words)>1 else 0
+                      if 0 < gap < 70*SCALE:
+                          tx=LEFT_W+int(50*SCALE)
+                          for w in words:
+                              draw.text((tx,y), w, font=f_bn, fill=(15,25,85))
+                              tx+=draw.textlength(w, font=f_bn)+draw.textlength(" ", font=f_bn)+gap
+                      else:
+                          draw.text((LEFT_W+int(50*SCALE), y), line, font=f_bn, fill=(15,25,85))
+                  else:
+                      draw.text((LEFT_W+int(50*SCALE), y), line, font=f_bn, fill=(15,25,85))
                   y+=int(BASE_BN*SCALE*1.4)
 
               bg.save(os.path.join(OUT, filename), "JPEG", quality=95, subsampling=0)
-              print(f"Done {filename} | W={W} H={H}")
+              print(f"Done {filename} | W={W} H={H} (BASE_H={BASE_H}) | {AR_NAME} - {BN_NAME}")
 
           PY
 
@@ -254,5 +269,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -f output/
-          git commit -m "fix: fixed ayat font, only details name auto-shrink + width 3840 lock" || echo "no changes"
+          git commit -m "fix: width 3840 lock + fixed ayat font 80/52 + details auto-shrink + sundor colon format" || echo "no changes"
           git push
