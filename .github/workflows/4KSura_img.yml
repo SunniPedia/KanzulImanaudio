@@ -1,0 +1,246 @@
+name: Generate Ayah Images 4K
+
+on:
+  workflow_dispatch:
+    inputs:
+      arabic_name:
+        description: 'আরবি সূরার নাম (উপরে থাকবে)'
+        required: true
+        type: string
+      bangla_name:
+        description: 'বাংলা সূরার নাম (নিচে থাকবে)'
+        required: true
+        type: string
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - run: pip install Pillow
+
+      - name: Generate Fixed Images
+        env:
+          ARABIC_NAME: ${{ inputs.arabic_name }}
+          BANGLA_NAME: ${{ inputs.bangla_name }}
+        run: |
+          python3 << 'PY'
+          from PIL import Image, ImageDraw, ImageFont
+          import json, os, re, shutil
+
+          BG="src/background.jpg"
+          LOGO="src/logo.jpg"
+          DATA="src/data.json"
+          OUT="output"
+          FONT_BN="src/solaimanlipi.ttf"
+          FONT_AR="src/noorehuda.ttf"
+
+          def normalize_arabic_display(text):
+              return text.replace('\u0671', '\u0627')
+
+          AR_NAME=normalize_arabic_display(os.environ.get("ARABIC_NAME","").strip())
+          BN_NAME=os.environ.get("BANGLA_NAME","").strip()
+
+          if os.path.exists(OUT):
+              shutil.rmtree(OUT)
+          os.makedirs(OUT, exist_ok=True)
+
+          EN_TO_BN=str.maketrans("0123456789","০১২৩৪৫৬৭৮৯")
+          def to_bangla_num(s): return str(s).translate(EN_TO_BN)
+          def extract_number(s):
+              s=str(s).translate(str.maketrans("০১২৩৪৫৬৭৮৯","0123456789"))
+              m=re.search(r'\d+',s)
+              return int(m.group()) if m else 0
+          def clean_name(text):
+              text = re.sub(r'\s*\(\s*[0-9০-৯]+\s*\)', '', text)
+              return re.sub(r'\s{2,}', ' ', text).strip()
+
+          # ---- Background handling rule ----
+          TARGET_W = 3840
+          if os.path.exists(BG):
+              _bg_raw = Image.open(BG).convert("RGB")
+          else:
+              _bg_raw = Image.new("RGB", (TARGET_W, 2160), (232,236,244))
+
+          if _bg_raw.width!= TARGET_W:
+              _resize_ratio = TARGET_W / _bg_raw.width
+              _new_h = round(_bg_raw.height * _resize_ratio)
+              orig_bg = _bg_raw.resize((TARGET_W, _new_h), Image.LANCZOS)
+              print(f"[INFO] background.jpg width {_bg_raw.width} → {TARGET_W} e normalize kora holo")
+          else:
+              orig_bg = _bg_raw
+
+          W = TARGET_W
+          BASE_W, BASE_H = orig_bg.size
+
+          def make_canvas(target_h):
+              if target_h <= BASE_H:
+                  return orig_bg.copy()
+              canvas = Image.new("RGB", (W, target_h), (232,236,244))
+              canvas.paste(orig_bg, (0,0))
+              strip = orig_bg.crop((0, BASE_H-10, W, BASE_H))
+              stretched_strip = strip.resize((W, target_h - BASE_H), Image.LANCZOS)
+              canvas.paste(stretched_strip, (0, BASE_H))
+              return canvas
+
+          LEFT_W=int(W*0.22)
+          SCALE=W/1280
+
+          def get_font_by_size(is_ar, px_size):
+              p=FONT_AR if is_ar else FONT_BN
+              try: return ImageFont.truetype(p, int(px_size))
+              except: return ImageFont.load_default()
+          def get_font(is_ar, dp):
+              return get_font_by_size(is_ar, dp*SCALE)
+
+          with open(DATA, encoding="utf-8") as f:
+              data=json.load(f)
+
+          # ---- FIXED FONT, NO SHRINK ----
+          BASE_SURA=40
+          BASE_KANZUL=42
+          BASE_BN=52
+          BASE_AR=80
+          BASE_DETAILS_AR=68
+          BASE_DETAILS_BN=68
+
+          SURA_Y=int(300*SCALE)
+          AYAT_Y=SURA_Y + int(BASE_SURA*SCALE*1.6)
+          LINE_Y=AYAT_Y + int(BASE_SURA*SCALE*1.6)
+          LINE_Y_NO_AYAT=SURA_Y + int(BASE_SURA*SCALE*1.6)
+
+          BOTTOM_MARGIN = int(5 * SCALE)
+          TOP_MARGIN = int(120*SCALE)
+
+          def disp(n):
+              if n == 0: return "0"
+              return f"0{n}" if n < 10 else str(n)
+
+          for item in data:
+              sura_int=extract_number(item.get('sura','0'))
+              ayat_int=extract_number(item.get('verses','0'))
+              filename=f"{sura_int:03d}{ayat_int:03d}.jpg"
+              sura_disp=to_bangla_num(disp(sura_int))
+              ayat_disp=to_bangla_num(disp(ayat_int))
+              show_ayat = ayat_int!= 0
+              line_y = LINE_Y if show_ayat else LINE_Y_NO_AYAT
+
+              # Fixed font
+              f_ar = get_font(True, BASE_AR)
+              f_bn = get_font(False, BASE_BN)
+              f_sura=get_font(False, BASE_SURA)
+              f_kanzul=get_font(False, BASE_KANZUL)
+
+              max_w=W-LEFT_W-int(140*SCALE)
+              _calc_draw = ImageDraw.Draw(Image.new("RGB",(10,10)))
+
+              # Line wrap with fixed font
+              arabic_raw=normalize_arabic_display(item.get('names','').strip())
+              arabic_lines=[]
+              cur=""
+              for w in arabic_raw.split():
+                  test=f"{cur} {w}".strip()
+                  if _calc_draw.textlength(test, font=f_ar) <= max_w:
+                      cur=test
+                  else:
+                      if cur: arabic_lines.append(cur)
+                      cur=w
+              if cur: arabic_lines.append(cur)
+
+              cleaned=clean_name(item.get('name',''))
+              bn_lines=[]
+              cur=""
+              for w in cleaned.split():
+                  test=f"{cur} {w}".strip()
+                  if _calc_draw.textlength(test, font=f_bn) <= max_w:
+                      cur=test
+                  else:
+                      if cur: bn_lines.append(cur)
+                      cur=w
+              if cur: bn_lines.append(cur)
+
+              # Height calculation with fixed font
+              total_block_h = len(arabic_lines)*int(BASE_AR*SCALE*1.5) + int(50*SCALE) + int(75*SCALE) + len(bn_lines)*int(BASE_BN*SCALE*1.4)
+              required_H = total_block_h + TOP_MARGIN + BOTTOM_MARGIN + int(300*SCALE)
+              H = max(BASE_H, required_H)
+
+              bg = make_canvas(H)
+              draw=ImageDraw.Draw(bg)
+              draw.rectangle([0,0,LEFT_W,H], fill=(214,218,228))
+              draw.line([(LEFT_W,0),(LEFT_W,H)], fill=(35,45,85), width=int(4*SCALE))
+
+              if os.path.exists(LOGO):
+                  try:
+                      ls=int(200*SCALE)
+                      logo=Image.open(LOGO).convert("RGBA").resize((ls,ls), Image.LANCZOS)
+                      bg.paste(logo,(int((LEFT_W-ls)//2), int(30*SCALE)), logo)
+                  except: pass
+
+              start_y = max(TOP_MARGIN, (H - total_block_h - BOTTOM_MARGIN)//2)
+
+              # Sura/Ayat labels
+              def draw_centered_label_colon(draw, y, label, value, font, fill):
+                  label_w = draw.textlength(label, font=font)
+                  colon_w = draw.textlength(":", font=font)
+                  value_w = draw.textlength(" "+value, font=font) if value else 0
+                  total_w = label_w + colon_w + value_w
+                  start_x = (LEFT_W - total_w)//2
+                  draw.text((start_x, y), label, font=font, fill=fill)
+                  draw.text((start_x+label_w, y-int(font.size*0.12)), ":", font=font, fill=fill)
+                  if value:
+                      draw.text((start_x+label_w+colon_w, y), " "+value, font=font, fill=fill)
+
+              def draw_label_colon(draw, x, y, label, value, font, fill):
+                  draw.text((x, y), label, font=font, fill=fill)
+                  label_w = draw.textlength(label, font=font)
+                  draw.text((x+label_w, y-int(font.size*0.12)), ":", font=font, fill=fill)
+                  colon_w = draw.textlength(":", font=font)
+                  if value:
+                      draw.text((x+label_w+colon_w, y), " "+value, font=font, fill=fill)
+
+              draw_centered_label_colon(draw, SURA_Y, "সূরা", sura_disp, f_sura, (0,0,0))
+              if show_ayat:
+                  draw_centered_label_colon(draw, AYAT_Y, "আয়াত", ayat_disp, f_sura, (0,0,0))
+              draw.line([(int(40*SCALE), line_y), (int(LEFT_W-40*SCALE), line_y)], fill=(100,100,120), width=2)
+
+              f_ar_det=get_font_by_size(True, BASE_DETAILS_AR*SCALE)
+              f_bn_det=get_font_by_size(False, BASE_DETAILS_BN*SCALE)
+              draw.text(((LEFT_W - draw.textlength(AR_NAME, font=f_ar_det))//2, line_y + int(55*SCALE)), AR_NAME, font=f_ar_det, fill=(20,20,60))
+              draw.text(((LEFT_W - draw.textlength(BN_NAME, font=f_bn_det))//2, line_y + int(55*SCALE) + int(BASE_DETAILS_AR*SCALE*1.6) + int(22*SCALE)), BN_NAME, font=f_bn_det, fill=(20,20,60))
+
+              y=start_y
+              for line in arabic_lines:
+                  w=draw.textlength(line, font=f_ar)
+                  draw.text((W-int(70*SCALE)-w, y), line, font=f_ar, fill=(0,0,0))
+                  y+=int(BASE_AR*SCALE*1.5)
+              y+=int(50*SCALE)
+              draw_label_colon(draw, LEFT_W+int(50*SCALE), y, "কানযুল ঈমান থেকে অনুবাদ", "", f_kanzul, (20,40,120))
+              y+=int(75*SCALE)
+              for line in bn_lines:
+                  draw.text((LEFT_W+int(50*SCALE), y), line, font=f_bn, fill=(15,25,85))
+                  y+=int(BASE_BN*SCALE*1.4)
+
+              bg.save(os.path.join(OUT, filename), "JPEG", quality=95, subsampling=0)
+              print(f"Done {filename} | W={W} H={H} (BASE_H={BASE_H}) Fixed Font")
+
+          PY
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ayah-images
+          path: output/
+          retention-days: 7
+
+      - name: Push output
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -f output/
+          git commit -m "fix: fixed font, only height grows" || echo "no changes"
+          git push
