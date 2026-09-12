@@ -110,13 +110,13 @@ jobs:
 
             echo "Processing: $file_name -> $base.mp4"
 
-            # এখন image already 3840 width fixed, তাই আর crop/scale দরকার নেই
-            # শুধু fps, sar, pix_fmt ঠিক করা
+            # --- FIXED PART: NO STRETCH ---
+            # আগের scale=trunc(iw/2)*2... বাদ দিয়ে শুধু pad দিয়ে even করা হয়েছে, তাই ছবি stretch হবে না
             ffmpeg -y -hide_banner -loglevel error \
               -loop 1 -i "$img_file" \
               -i "$audio_file" \
               -c:v libx264 -tune stillimage -preset medium -crf 18 \
-              -vf "setsar=1,fps=30,scale=trunc(iw/2)*2:trunc(ih/2)*2" \
+              -vf "setsar=1,fps=30,pad=ceil(iw/2)*2:ceil(ih/2)*2:(ow-iw)/2:(oh-ih)/2:color=black@0" \
               -c:a aac -b:a 192k \
               -pix_fmt yuv420p -shortest \
               "$TEMP_VIDEO_DIR/$base.mp4"
