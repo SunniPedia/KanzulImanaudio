@@ -415,16 +415,34 @@ jobs:
           ls -lh "$FINAL_DIR"/
           rm -rf "$TEMP_VIDEO_DIR" concat_list.txt normalized
 
-      - name: Upload Final Video
+      - name: Upload Final Video (workflow artifact - temporary)
         uses: actions/upload-artifact@v4
         with:
           name: Surah-${{ inputs.surah_number }}-Portrait-Video
           path: rizwanSurahVideo/
 
-      - name: Commit outputs to repo
+      # ---------------------------------------------------------
+      # ধাপ ৪: ফাইনাল mp4 টা প্রতি সূরার জন্য আলাদা GitHub Release
+      # হিসেবে পাবলিশ করা (ভিডিও রিপোতে commit/push করা হবে না,
+      # শুধু Release asset হিসেবে থাকবে - 100MB লিমিট এড়াতে সাহায্য করে,
+      # Release-এ প্রতি ফাইল 2GB পর্যন্ত রাখা যায়)
+      # ---------------------------------------------------------
+      - name: Publish Surah Video as GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: surah-${{ inputs.surah_number }}
+          name: "সূরা ${{ inputs.bangla_name }} (নং ${{ inputs.surah_number }}) - Portrait Video"
+          body: |
+            🎬 সূরা ${{ inputs.bangla_name }} (সূরা নং ${{ inputs.surah_number }}) এর পোর্ট্রেট (৯:১৬) ভিডিও।
+            রেজোলিউশন: ${{ inputs.target_width }}x${{ inputs.target_height }}
+          files: rizwanSurahVideo/${{ inputs.surah_number }}.mp4
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Commit overlays to repo
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add -f overlays/ rizwanSurahVideo/
-          git commit -m "Surah ${{ inputs.surah_number }}: portrait overlays + final video (all-in-one)" || echo "No changes"
-          git push || echo "Push failed - file >100MB, use Artifact"
+          git add -f overlays/
+          git commit -m "Surah ${{ inputs.surah_number }}: portrait overlays generated (video published via Release)" || echo "No changes"
+          git push || echo "Push failed"
