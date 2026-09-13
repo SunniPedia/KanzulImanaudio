@@ -147,15 +147,45 @@ jobs:
               if n == 0: return "0"
               return f"0{n}" if n < 10 else str(n)
 
+          # colon glyph টা এই ফন্টে বেসলাইনের নিচের দিকে বসে, তাই একটু উপরে তুলে
+          # আলাদাভাবে আঁকা হয় যাতে এটা লেবেল/ভ্যালুর সাথে উলম্বভাবে মাঝ বরাবর দেখায়
+          COLON_LIFT_RATIO = 0.16
+
+          def _piece_widths(draw, label, colon_str, value, font):
+              label_w = draw.textlength(label, font=font)
+              colon_w = draw.textlength(colon_str, font=font)
+              value_w = draw.textlength(value, font=font) if value else 0
+              return label_w, colon_w, value_w
+
+          def draw_label_with_centered_colon(draw, x, y, label, value, font, fill, attach_colon=False):
+              """
+              attach_colon=False -> 'লেবেল : মান'  (স্পেস সহ, সূরা/আয়াত এর জন্য)
+              attach_colon=True  -> 'লেবেল: মান'   (লেবেলের সাথে লাগানো, অনুবাদ লেবেলের জন্য)
+              কোলনটা font size অনুযায়ী উপরে তুলে আঁকা হয়, যাতে মাঝ বরাবর দেখায়।
+              """
+              colon_str = ": " if (attach_colon and value) else (":" if attach_colon else " : " if value else " :")
+              label_w, colon_w, value_w = _piece_widths(draw, label, colon_str, value, font)
+              total_w = label_w + colon_w + value_w
+
+              lift = int(font.size * COLON_LIFT_RATIO)
+
+              draw.text((x, y), label, font=font, fill=fill)
+              draw.text((x + label_w, y - lift), colon_str, font=font, fill=fill)
+              if value:
+                  draw.text((x + label_w + colon_w, y), value, font=font, fill=fill)
+
+              return total_w
+
           def draw_centered_label_colon(draw, y, label, value, font, fill):
-              full_text = f"{label} : {value}" if value else f"{label} :"
-              total_w = draw.textlength(full_text, font=font)
+              colon_str = " : " if value else " :"
+              label_w, colon_w, value_w = _piece_widths(draw, label, colon_str, value, font)
+              total_w = label_w + colon_w + value_w
               start_x = (LEFT_W - total_w)//2
-              draw.text((start_x, y), full_text, font=font, fill=fill)
+              draw_label_with_centered_colon(draw, start_x, y, label, value, font, fill, attach_colon=False)
 
           def draw_label_colon(draw, x, y, label, value, font, fill):
-              full_text = f"{label} : {value}" if value else f"{label} :"
-              draw.text((x, y), full_text, font=font, fill=fill)
+              # অনুবাদ লেবেলের কোলন সরাসরি লেবেলের সাথে লাগানো + মাঝ বরাবর তোলা
+              draw_label_with_centered_colon(draw, x, y, label, value, font, fill, attach_colon=True)
 
           for item in data:
               sura_int=extract_number(item.get('sura','0'))
@@ -271,5 +301,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -f output/
-          git commit -m "fix: separate shrink for ar and bn details names + width 3840 lock" || echo "no changes"
+          git commit -m "fix: colon glyphs vertically centered (sura/ayat/onubad)" || echo "no changes"
           git push
