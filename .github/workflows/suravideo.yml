@@ -26,6 +26,11 @@ on:
         required: false
         default: 'rizwanaudio'
         type: string
+      logo_path:
+        description: 'Logo image path (top-right corner-এ বসবে)'
+        required: false
+        default: 'src/logo.png'
+        type: string
       target_width:
         description: 'Target video width (9:16 পোর্ট্রেট 4K)'
         required: false
@@ -53,13 +58,14 @@ jobs:
 
       # ---------------------------------------------------------
       # ধাপ ১: শুধু নির্দিষ্ট সূরার আয়াতগুলোর জন্য transparent overlay বানানো
-      # (পোর্ট্রেট 9:16 ডিজাইন: পিল ব্যাজ + গোল আয়াত-নম্বর ব্যাজ + আরবি/বাংলা বার)
+      # (পোর্ট্রেট 9:16 ডিজাইন: পিল ব্যাজ + গোল আয়াত-নম্বর ব্যাজ + আরবি/বাংলা বার + লোগো)
       # ---------------------------------------------------------
       - name: Generate Overlays for this Surah
         env:
           ARABIC_NAME: ${{ inputs.arabic_name }}
           BANGLA_NAME: ${{ inputs.bangla_name }}
           SURAH_NUMBER: ${{ inputs.surah_number }}
+          LOGO_PATH: ${{ inputs.logo_path }}
           TARGET_W: ${{ inputs.target_width }}
           TARGET_H: ${{ inputs.target_height }}
         run: |
@@ -78,6 +84,7 @@ jobs:
 
           SURAH_NUMBER = int(os.environ.get("SURAH_NUMBER", "0"))
           BN_NAME = os.environ.get("BANGLA_NAME", "").strip()
+          LOGO_PATH = os.environ.get("LOGO_PATH", "src/logo.png").strip()
           # ARABIC_NAME env kept for future use, intentionally not drawn.
 
           os.makedirs(OUT, exist_ok=True)
@@ -114,11 +121,11 @@ jobs:
                   lines.append(cur)
               return lines
 
-          def draw_stroked(draw, xy, text, font, fill, stroke=(255, 255, 255, 220)):
-              draw.text(xy, text, font=font, fill=fill,
-                        stroke_width=max(1, int(font.size * 0.045)), stroke_fill=stroke)
+          # বোল্ড/আউটলাইন লুক বাদ দেওয়া হয়েছে - এখন প্লেইন টেক্সট আঁকা হয় (কোনো stroke নেই)
+          def draw_stroked(draw, xy, text, font, fill, stroke=None):
+              draw.text(xy, text, font=font, fill=fill)
 
-          def draw_centered(draw, cx, y, text, font, fill, stroke=(255, 255, 255, 220)):
+          def draw_centered(draw, cx, y, text, font, fill, stroke=None):
               w = draw.textlength(text, font=font)
               draw_stroked(draw, (cx - w / 2, y), text, font, fill, stroke)
 
@@ -147,6 +154,11 @@ jobs:
           BAR_PAD_X       = int(34 * SCALE)
           BAR_PAD_Y       = int(22 * SCALE)
           BADGE_PAD_X     = int(26 * SCALE)
+          BADGE_GAP       = int(40 * SCALE)  # পিল আর নীল ব্যাজের মাঝে দূরত্ব (ওভারল্যাপ ঠেকাতে)
+
+          # লোগো সেটিংস (top-right corner)
+          LOGO_MARGIN = int(50 * SCALE)
+          LOGO_MAX_W  = int(160 * SCALE)
           # ------------------------------------------------------
 
           with open(DATA, encoding="utf-8") as f:
@@ -157,11 +169,28 @@ jobs:
 
           _dummy = ImageDraw.Draw(Image.new("RGBA", (10, 10)))
 
+          # লোগো একবার লোড করে রিসাইজ করে নেওয়া (প্রতি ফ্রেমে বারবার লোড না করে)
+          logo_img = None
+          if LOGO_PATH and os.path.exists(LOGO_PATH):
+              try:
+                  _logo = Image.open(LOGO_PATH).convert("RGBA")
+                  ratio = LOGO_MAX_W / _logo.width
+                  new_size = (LOGO_MAX_W, max(1, int(_logo.height * ratio)))
+                  logo_img = _logo.resize(new_size, Image.LANCZOS)
+              except Exception as e:
+                  print(f"Logo load failed: {e}")
+                  logo_img = None
+          else:
+              print(f"Logo not found at {LOGO_PATH}, skipping logo overlay")
+
           for item in data:
               sura_int = extract_number(item.get('sura', '0'))
               ayat_int = extract_number(item.get('verses', '0'))
               filename = f"{sura_int:03d}{ayat_int:03d}.png"
               ayat_disp = to_bangla_num(ayat_int)
+
+              # আয়াত ০ মানে বিসমিল্লাহ - এক্ষেত্রে নীল নাম্বার ব্যাজ দেখানো হবে না
+              draw_badge = ayat_int != 0
 
               arabic_text = normalize_arabic_display(item.get('names', '').strip())
               bangla_translation = item.get('name', '').strip()
@@ -216,7 +245,12 @@ jobs:
 
               pill_w = _dummy.textlength(pill_text, font=f_pill) + 2 * BADGE_PAD_X
               pill_h = badge_diam
-              row_total_w = pill_w + badge_diam * 0.6
+
+              if draw_badge:
+                  row_total_w = pill_w + BADGE_GAP + badge_diam
+              else:
+                  row_total_w = pill_w
+
               row_left = cx - row_total_w / 2
 
               pill_box = [row_left, y, row_left + pill_w, y + pill_h]
@@ -225,11 +259,13 @@ jobs:
               pty = y + (pill_h - f_pill.size) / 2 - int(6 * SCALE)
               draw.text((ptx, pty), pill_text, font=f_pill, fill=PILL_TEXT)
 
-              circle_cx = row_left + pill_w - badge_diam * 0.35
-              circle_box = [circle_cx, y, circle_cx + badge_diam, y + badge_diam]
-              draw.ellipse(circle_box, fill=BADGE_BG)
-              draw_centered(draw, circle_cx + badge_diam / 2, y + (badge_diam - f_badge.size) / 2 - int(4 * SCALE),
-                            ayat_disp, f_badge, BADGE_TEXT, stroke=BADGE_BG)
+              if draw_badge:
+                  circle_cx = row_left + pill_w + BADGE_GAP
+                  circle_box = [circle_cx, y, circle_cx + badge_diam, y + badge_diam]
+                  draw.ellipse(circle_box, fill=BADGE_BG)
+                  draw_centered(draw, circle_cx + badge_diam / 2,
+                                y + (badge_diam - f_badge.size) / 2 - int(4 * SCALE),
+                                ayat_disp, f_badge, BADGE_TEXT)
 
               y += badge_row_h + GAP
 
@@ -251,8 +287,14 @@ jobs:
                   draw_centered(draw, cx, ty, line, f_bn, WHITE)
                   ty += int(f_bn.size * 1.45)
 
+              # লোগো - সবসময় একদম উপরের ডান কোণায়
+              if logo_img is not None:
+                  lx = W - LOGO_MARGIN - logo_img.width
+                  ly = LOGO_MARGIN
+                  bg.alpha_composite(logo_img, (lx, ly))
+
               bg.save(os.path.join(OUT, filename))
-              print(f"Done {filename} | AR font {ar_size} BN font {bn_size}")
+              print(f"Done {filename} | AR font {ar_size} BN font {bn_size} | badge={draw_badge}")
           PY
 
       # ---------------------------------------------------------
