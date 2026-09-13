@@ -17,7 +17,7 @@ on:
         required: true
         type: string
       background_video:
-        description: 'Background video path'
+        description: 'Background video path (repo-এর ভেতরের ফাইল) অথবা সরাসরি ডাউনলোডযোগ্য URL (http/https)। খালি রাখলে ডিফল্ট src/background.mp4 ব্যবহার হবে।'
         required: false
         default: 'src/background.mp4'
         type: string
@@ -29,7 +29,7 @@ on:
       logo_path:
         description: 'Logo image path (top-right corner-এ বসবে)'
         required: false
-        default: 'src/logo.png'
+        default: 'src/logo.jpg'
         type: string
       target_width:
         description: 'Target video width (9:16 পোর্ট্রেট 4K)'
@@ -55,6 +55,40 @@ jobs:
       - run: |
           pip install Pillow
           sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      # ---------------------------------------------------------
+      # ধাপ ০: background_video ইনপুট চেক - URL হলে ডাউনলোড করা,
+      # খালি/লোকাল পাথ হলে ডিফল্ট/দেওয়া পাথ ব্যবহার করা
+      # ---------------------------------------------------------
+      - name: Resolve background video (download if URL)
+        id: resolve_bg
+        env:
+          BG_INPUT: ${{ inputs.background_video }}
+        run: |
+          set -e
+          BG="${BG_INPUT:-src/background.mp4}"
+
+          if [[ "$BG" == http://* || "$BG" == https://* ]]; then
+            echo "Link দেওয়া আছে, ডাউনলোড করা হচ্ছে: $BG"
+            mkdir -p downloaded
+            EXT="${BG##*.}"
+            case "$EXT" in
+              mp4|mov|mkv|webm) OUT_FILE="downloaded/background.$EXT" ;;
+              *) OUT_FILE="downloaded/background.mp4" ;;
+            esac
+
+            curl -L -f --retry 3 --retry-delay 5 -o "$OUT_FILE" "$BG"
+
+            if [ ! -s "$OUT_FILE" ]; then
+              echo "Download failed ba empty file - default local video use kora hocche"
+              OUT_FILE="src/background.mp4"
+            fi
+
+            echo "BG_RESOLVED=$OUT_FILE" >> "$GITHUB_ENV"
+          else
+            echo "Link deya nei - local path use kora hocche: $BG"
+            echo "BG_RESOLVED=$BG" >> "$GITHUB_ENV"
+          fi
 
       # ---------------------------------------------------------
       # ধাপ ১: শুধু নির্দিষ্ট সূরার আয়াতগুলোর জন্য transparent overlay বানানো
@@ -84,7 +118,7 @@ jobs:
 
           SURAH_NUMBER = int(os.environ.get("SURAH_NUMBER", "0"))
           BN_NAME = os.environ.get("BANGLA_NAME", "").strip()
-          LOGO_PATH = os.environ.get("LOGO_PATH", "src/logo.png").strip()
+          LOGO_PATH = os.environ.get("LOGO_PATH", "src/logo.jpg").strip()
           # ARABIC_NAME env kept for future use, intentionally not drawn.
 
           os.makedirs(OUT, exist_ok=True)
@@ -252,7 +286,6 @@ jobs:
                   row_total_w = pill_w
 
               row_left = cx - row_total_w / 2
-
               pill_box = [row_left, y, row_left + pill_w, y + pill_h]
               draw.rounded_rectangle(pill_box, radius=pill_h // 2, fill=PILL_BG)
               ptx = row_left + BADGE_PAD_X
@@ -302,7 +335,7 @@ jobs:
       # ---------------------------------------------------------
       - name: Normalize background video resolution (upscale if needed)
         env:
-          BG_VIDEO: ${{ inputs.background_video }}
+          BG_VIDEO: ${{ env.BG_RESOLVED }}
           TARGET_W: ${{ inputs.target_width }}
           TARGET_H: ${{ inputs.target_height }}
         run: |
