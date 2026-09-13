@@ -1,0 +1,111 @@
+name: 4K Video RizwanNew
+
+on:
+  workflow_dispatch:
+    inputs:
+      surah_number:
+        description: 'কোন সুরার ভিডিও বানাবে? (যেমন: 001, 002)'
+        required: true
+        default: '001'
+        type: string
+      overlay_folder:
+        description: 'Overlay PNG folder (workflow 1 এর output)'
+        required: false
+        default: 'overlays'
+        type: string
+      audio_folder:
+        description: 'Audio folder'
+        required: false
+        default: 'rizwanaudio'
+        type: string
+      background_video:
+        description: 'Background video path'
+        required: false
+        default: 'src/background.mp4'
+        type: string
+
+jobs:
+  make-video:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Build per-ayah clips and merge
+        run: |
+          OVERLAY_DIR="${{ inputs.overlay_folder }}"
+          AUDIO_DIR="${{ inputs.audio_folder }}"
+          BG_VIDEO="${{ inputs.background_video }}"
+          SURAH="${{ inputs.surah_number }}"
+          TEMP_VIDEO_DIR="temp_${SURAH}_videos"
+          FINAL_DIR="rizwanSurahVideo"
+
+          mkdir -p "$TEMP_VIDEO_DIR" "$FINAL_DIR"
+
+          # ব্যাকগ্রাউন্ড ভিডিওর রেজোলিউশন বের করা (overlay PNG এর সাথে মিলতে হবে)
+          BG_W=$(ffprobe -v error -select_streams v:0 -show_entries stream=width -of csv=p=0 "$BG_VIDEO")
+          BG_H=$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 "$BG_VIDEO")
+          echo "Background resolution: ${BG_W}x${BG_H}"
+
+          for overlay_file in "$OVERLAY_DIR"/${SURAH}*.png; do
+            [ -e "$overlay_file" ] || continue
+            base=$(basename "$overlay_file" .png)
+            audio_file="$AUDIO_DIR/$base.mp3"
+
+            if [ ! -f "$audio_file" ]; then
+              echo "Audio missing: $audio_file - Skipping"
+              continue
+            fi
+
+            AUDIO_DUR=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$audio_file")
+            echo "Processing $base | audio duration: ${AUDIO_DUR}s"
+
+            # background.mp4 লুপ হতে থাকবে যতক্ষণ না অডিও শেষ হয় (-shortest দিয়ে অডিওর length এ কাট হবে)
+            ffmpeg -y -hide_banner -loglevel error \
+              -stream_loop -1 -i "$BG_VIDEO" \
+              -loop 1 -i "$overlay_file" \
+              -i "$audio_file" \
+              -filter_complex "[0:v]scale=${BG_W}:${BG_H},setsar=1,fps=30[bg];[bg][1:v]overlay=0:0:shortest=1[outv]" \
+              -map "[outv]" -map 2:a \
+              -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p \
+              -c:a aac -b:a 192k \
+              -shortest \
+              "$TEMP_VIDEO_DIR/$base.mp4"
+          done
+
+          if ! ls "$TEMP_VIDEO_DIR"/${SURAH}*.mp4 1> /dev/null 2>&1; then
+            echo "No clips generated for Surah $SURAH"
+            exit 1
+          fi
+
+          # concat list বানানো (সব ক্লিপের resolution/codec একই তাই সরাসরি concat demuxer)
+          ls -1 "$TEMP_VIDEO_DIR"/${SURAH}*.mp4 | sort -V | while read f; do
+            echo "file '$(realpath "$f")'"
+          done > concat_list.txt
+
+          ffmpeg -y -hide_banner -loglevel error \
+            -f concat -safe 0 -i concat_list.txt \
+            -c copy \
+            "$FINAL_DIR/${SURAH}.mp4"
+
+          ls -lh "$FINAL_DIR"/
+          rm -rf "$TEMP_VIDEO_DIR" concat_list.txt
+
+      - name: Upload Final Video
+        uses: actions/upload-artifact@v4
+        with:
+          name: Surah-${{ inputs.surah_number }}-4K-Video
+          path: rizwanSurahVideo/
+
+      - name: Commit Video to Repo
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add -f rizwanSurahVideo/
+          git commit -m "Added Surah ${{ inputs.surah_number }} 4K Video with looping background" || echo "No changes"
+          git push || echo "Push failed - file >100MB, use Artifact"
