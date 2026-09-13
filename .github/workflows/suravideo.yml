@@ -1,58 +1,323 @@
-name: 4K Video RizwanNew
+name: Generate Surah Video (All-in-One)
 
 on:
   workflow_dispatch:
     inputs:
       surah_number:
-        description: 'কোন সুরার ভিডিও বানাবে? (যেমন: 001, 002)'
+        description: 'সূরা নম্বর (যেমন: 111)'
         required: true
-        default: '001'
         type: string
-      overlay_folder:
-        description: 'Overlay PNG folder (workflow 1 এর output)'
-        required: false
-        default: 'overlays'
+      arabic_name:
+        description: 'আরবি সূরার নাম (উপরে থাকবে)'
+        required: true
         type: string
-      audio_folder:
-        description: 'Audio folder'
-        required: false
-        default: 'rizwanaudio'
+      bangla_name:
+        description: 'বাংলা সূরার নাম (নিচে থাকবে)'
+        required: true
         type: string
       background_video:
         description: 'Background video path'
         required: false
         default: 'src/background.mp4'
         type: string
+      audio_folder:
+        description: 'Audio folder'
+        required: false
+        default: 'rizwanaudio'
+        type: string
+      target_width:
+        description: 'Target video width'
+        required: false
+        default: '3840'
+        type: string
+      target_height:
+        description: 'Target video height'
+        required: false
+        default: '2160'
+        type: string
 
 jobs:
-  make-video:
+  build:
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - run: |
+          pip install Pillow
+          sudo apt-get update && sudo apt-get install -y ffmpeg
 
-      - name: Install FFmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
-
-      - name: Build per-ayah clips and merge
+      # ---------------------------------------------------------
+      # ধাপ ১: শুধু নির্দিষ্ট সূরার আয়াতগুলোর জন্য transparent overlay বানানো
+      # ---------------------------------------------------------
+      - name: Generate Overlays for this Surah
+        env:
+          ARABIC_NAME: ${{ inputs.arabic_name }}
+          BANGLA_NAME: ${{ inputs.bangla_name }}
+          SURAH_NUMBER: ${{ inputs.surah_number }}
+          TARGET_W: ${{ inputs.target_width }}
+          TARGET_H: ${{ inputs.target_height }}
         run: |
-          OVERLAY_DIR="${{ inputs.overlay_folder }}"
-          AUDIO_DIR="${{ inputs.audio_folder }}"
-          BG_VIDEO="${{ inputs.background_video }}"
-          SURAH="${{ inputs.surah_number }}"
+          python3 << 'PY'
+          from PIL import Image, ImageDraw, ImageFont
+          import json, os, re, shutil
+
+          LOGO="src/logo.jpg"
+          DATA="src/data.json"
+          OUT="overlays"
+          FONT_BN="src/solaimanlipi.ttf"
+          FONT_AR="src/noorehuda.ttf"
+
+          W = int(os.environ.get("TARGET_W", "3840"))
+          H = int(os.environ.get("TARGET_H", "2160"))
+          SCALE = W/1280
+
+          SURAH_NUMBER = int(os.environ.get("SURAH_NUMBER", "0"))
+
+          def normalize_arabic_display(text):
+              return text.replace('\u0671', '\u0627')
+
+          AR_NAME=normalize_arabic_display(os.environ.get("ARABIC_NAME","").strip())
+          BN_NAME=os.environ.get("BANGLA_NAME","").strip()
+
+          os.makedirs(OUT, exist_ok=True)
+
+          EN_TO_BN=str.maketrans("0123456789","০১২৩৪৫৬৭৮৯")
+          def to_bangla_num(s): return str(s).translate(EN_TO_BN)
+          def extract_number(s):
+              s=str(s).translate(str.maketrans("০১২৩৪৫৬৭৮৯","0123456789"))
+              m=re.search(r'\d+',s)
+              return int(m.group()) if m else 0
+          def clean_name(text):
+              text = re.sub(r'\s*\(\s*[0-9০-৯]+\s*\)', '', text)
+              return re.sub(r'\s{2,}', ' ', text).strip()
+
+          LEFT_W=int(W*0.22)
+          SIDE_MARGIN=int(30*SCALE)
+          RIGHT_MARGIN=int(70*SCALE)
+          PANEL_ALPHA=170
+          ANCHOR_Y_RATIO=0.68
+          MAX_BLOCK_H_RATIO=0.62
+
+          def get_font_by_size(is_ar, px_size):
+              p=FONT_AR if is_ar else FONT_BN
+              try: return ImageFont.truetype(p, int(px_size))
+              except: return ImageFont.load_default()
+          def get_font(is_ar, dp):
+              return get_font_by_size(is_ar, dp*SCALE)
+
+          with open(DATA, encoding="utf-8") as f:
+              data=json.load(f)
+
+          # শুধু এই সূরার আয়াতগুলো ফিল্টার করা
+          data = [it for it in data if extract_number(it.get('sura','0'))==SURAH_NUMBER]
+          print(f"Found {len(data)} ayahs for surah {SURAH_NUMBER}")
+
+          BASE_SURA=40
+          BASE_KANZUL=42
+          BASE_BN=52
+          BASE_AR=80
+          DETAILS_FLOOR=32
+          GAP_Y_DETAILS=int(22*SCALE)
+
+          def disp(n):
+              if n == 0: return "0"
+              return f"0{n}" if n < 10 else str(n)
+
+          COLON_LIFT_RATIO = 0.16
+
+          def draw_stroked(draw, xy, text, font, fill):
+              draw.text(xy, text, font=font, fill=fill,
+                         stroke_width=max(1,int(font.size*0.045)), stroke_fill=(255,255,255,220))
+
+          def _piece_widths(draw, label, colon_str, value, font):
+              label_w = draw.textlength(label, font=font)
+              colon_w = draw.textlength(colon_str, font=font)
+              value_w = draw.textlength(value, font=font) if value else 0
+              return label_w, colon_w, value_w
+
+          def draw_label_with_centered_colon(draw, x, y, label, value, font, fill, attach_colon=False):
+              colon_str = ": " if (attach_colon and value) else (":" if attach_colon else " : " if value else " :")
+              label_w, colon_w, value_w = _piece_widths(draw, label, colon_str, value, font)
+              total_w = label_w + colon_w + value_w
+              lift = int(font.size * COLON_LIFT_RATIO)
+              draw_stroked(draw, (x, y), label, font, fill)
+              draw_stroked(draw, (x + label_w, y - lift), colon_str, font, fill)
+              if value:
+                  draw_stroked(draw, (x + label_w + colon_w, y), value, font, fill)
+              return total_w
+
+          def draw_centered_label_colon(draw, y, label, value, font, fill):
+              colon_str = " : " if value else " :"
+              label_w, colon_w, value_w = _piece_widths(draw, label, colon_str, value, font)
+              total_w = label_w + colon_w + value_w
+              start_x = (LEFT_W - total_w)//2
+              draw_label_with_centered_colon(draw, start_x, y, label, value, font, fill, attach_colon=False)
+
+          def draw_label_colon(draw, x, y, label, value, font, fill):
+              draw_label_with_centered_colon(draw, x, y, label, value, font, fill, attach_colon=True)
+
+          for item in data:
+              sura_int=extract_number(item.get('sura','0'))
+              ayat_int=extract_number(item.get('verses','0'))
+              filename=f"{sura_int:03d}{ayat_int:03d}.png"
+              sura_disp=to_bangla_num(disp(sura_int))
+              ayat_disp=to_bangla_num(disp(ayat_int))
+              show_ayat = ayat_int != 0
+
+              _dummy=ImageDraw.Draw(Image.new("RGBA",(10,10)))
+              AVAIL_W_NAMES = LEFT_W - 2*SIDE_MARGIN
+              temp_AR, temp_BN = 72, 72
+              while True:
+                  f=get_font_by_size(True, temp_AR*SCALE)
+                  if _dummy.textlength(AR_NAME, font=f) <= AVAIL_W_NAMES or temp_AR<=DETAILS_FLOOR: break
+                  temp_AR-=2
+              while True:
+                  f=get_font_by_size(False, temp_BN*SCALE)
+                  if _dummy.textlength(BN_NAME, font=f) <= AVAIL_W_NAMES or temp_BN<=DETAILS_FLOOR: break
+                  temp_BN-=2
+              BASE_DETAILS_AR, BASE_DETAILS_BN = temp_AR, temp_BN
+
+              cur_ar, cur_bn = BASE_AR, BASE_BN
+              max_w = W - LEFT_W - RIGHT_MARGIN - int(50*SCALE)
+              while True:
+                  f_ar = get_font(True, cur_ar)
+                  f_bn = get_font(False, cur_bn)
+                  arabic_raw=normalize_arabic_display(item.get('names','').strip())
+                  arabic_lines=[]; cur=""
+                  for w in arabic_raw.split():
+                      test=f"{cur} {w}".strip()
+                      if _dummy.textlength(test, font=f_ar) <= max_w: cur=test
+                      else:
+                          if cur: arabic_lines.append(cur)
+                          cur=w
+                  if cur: arabic_lines.append(cur)
+
+                  cleaned=clean_name(item.get('name',''))
+                  bn_lines=[]; cur=""
+                  for w in cleaned.split():
+                      test=f"{cur} {w}".strip()
+                      if _dummy.textlength(test, font=f_bn) <= max_w: cur=test
+                      else:
+                          if cur: bn_lines.append(cur)
+                          cur=w
+                  if cur: bn_lines.append(cur)
+
+                  total_block_h = (len(arabic_lines)*int(cur_ar*SCALE*1.5) + int(50*SCALE)
+                                   + int(75*SCALE) + len(bn_lines)*int(cur_bn*SCALE*1.4))
+
+                  if total_block_h <= H*MAX_BLOCK_H_RATIO or (cur_ar<=DETAILS_FLOOR and cur_bn<=DETAILS_FLOOR):
+                      break
+                  cur_ar = max(DETAILS_FLOOR, cur_ar-2)
+                  cur_bn = max(DETAILS_FLOOR, cur_bn-2)
+
+              bg = Image.new("RGBA", (W, H), (0,0,0,0))
+              draw = ImageDraw.Draw(bg)
+
+              block_center_y = int(H*ANCHOR_Y_RATIO)
+              start_y = block_center_y - total_block_h//2
+              start_y = max(int(60*SCALE), min(start_y, H-total_block_h-int(60*SCALE)))
+
+              SURA_Y = start_y
+              AYAT_Y = SURA_Y + int(BASE_SURA*SCALE*1.6)
+              line_y = (AYAT_Y if show_ayat else SURA_Y) + int(BASE_SURA*SCALE*1.6)
+              names_y = line_y + int(55*SCALE)
+
+              panel_top = SURA_Y - int(160*SCALE)
+              panel_bottom = names_y + int(BASE_DETAILS_AR*SCALE*1.6) + GAP_Y_DETAILS + int(BASE_DETAILS_BN*SCALE*1.6) + int(40*SCALE)
+              draw.rounded_rectangle([int(10*SCALE), panel_top, LEFT_W-int(10*SCALE), panel_bottom],
+                                      radius=int(24*SCALE), fill=(20,25,45,PANEL_ALPHA))
+
+              if os.path.exists(LOGO):
+                  try:
+                      ls=int(180*SCALE)
+                      logo=Image.open(LOGO).convert("RGBA").resize((ls,ls), Image.LANCZOS)
+                      bg.paste(logo,(int((LEFT_W-ls)//2), panel_top+int(15*SCALE)), logo)
+                  except: pass
+
+              f_sura=get_font(False, BASE_SURA)
+              draw_centered_label_colon(draw, SURA_Y, "সূরা", sura_disp, f_sura, (255,255,255,255))
+              if show_ayat:
+                  draw_centered_label_colon(draw, AYAT_Y, "আয়াত", ayat_disp, f_sura, (255,255,255,255))
+              draw.line([(int(40*SCALE), line_y), (int(LEFT_W-40*SCALE), line_y)], fill=(200,200,210,200), width=2)
+
+              f_ar_det=get_font_by_size(True, BASE_DETAILS_AR*SCALE)
+              f_bn_det=get_font_by_size(False, BASE_DETAILS_BN*SCALE)
+              ar_w = draw.textlength(AR_NAME, font=f_ar_det)
+              bn_w = draw.textlength(BN_NAME, font=f_bn_det)
+              draw_stroked(draw, ((LEFT_W-ar_w)//2, names_y), AR_NAME, f_ar_det, (255,255,255,255))
+              draw_stroked(draw, ((LEFT_W-bn_w)//2, names_y+int(BASE_DETAILS_AR*SCALE*1.6)+GAP_Y_DETAILS),
+                           BN_NAME, f_bn_det, (255,255,255,255))
+
+              y=start_y
+              for line in arabic_lines:
+                  w=draw.textlength(line, font=f_ar)
+                  draw_stroked(draw, (W-RIGHT_MARGIN-w, y), line, f_ar, (255,255,255,255))
+                  y+=int(cur_ar*SCALE*1.5)
+
+              y+=int(50*SCALE)
+              draw_label_colon(draw, LEFT_W+int(50*SCALE), y, "কানযুল ঈমান থেকে অনুবাদ", "", get_font(False, BASE_KANZUL), (255,235,150,255))
+              y+=int(75*SCALE)
+
+              for line in bn_lines:
+                  draw_stroked(draw, (LEFT_W+int(50*SCALE), y), line, f_bn, (255,255,255,255))
+                  y+=int(cur_bn*SCALE*1.4)
+
+              bg.save(os.path.join(OUT, filename))
+              print(f"Done {filename} | AR font {cur_ar} BN font {cur_bn}")
+
+          PY
+
+      # ---------------------------------------------------------
+      # ধাপ ২: background ভিডিওর resolution চেক করে দরকার হলে বাড়ানো
+      # ---------------------------------------------------------
+      - name: Normalize background video resolution (upscale if needed)
+        env:
+          BG_VIDEO: ${{ inputs.background_video }}
+          TARGET_W: ${{ inputs.target_width }}
+          TARGET_H: ${{ inputs.target_height }}
+        run: |
+          BG_W=$(ffprobe -v error -select_streams v:0 -show_entries stream=width -of csv=p=0 "$BG_VIDEO")
+          BG_H=$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 "$BG_VIDEO")
+          echo "Original background: ${BG_W}x${BG_H} | Target: ${TARGET_W}x${TARGET_H}"
+
+          mkdir -p normalized
+
+          if [ "$BG_W" -lt "$TARGET_W" ] || [ "$BG_H" -lt "$TARGET_H" ]; then
+            echo "Resolution kom ache - upscaling + center-crop kore target size e fit korano hocche..."
+          else
+            echo "Resolution already target er soman ba beshi - normalize/crop kore fit korano hocche..."
+          fi
+
+          # scale up/down kore (force_original_aspect_ratio=increase) + center crop
+          # eita stretch na kore - aspect ratio thik rekhe fill kore, boro dimension crop hoy
+          ffmpeg -y -hide_banner -loglevel error \
+            -i "$BG_VIDEO" \
+            -vf "scale=${TARGET_W}:${TARGET_H}:force_original_aspect_ratio=increase,crop=${TARGET_W}:${TARGET_H},setsar=1,fps=30" \
+            -c:v libx264 -preset medium -crf 16 -pix_fmt yuv420p \
+            -an \
+            normalized/background_normalized.mp4
+
+          ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 normalized/background_normalized.mp4
+
+      # ---------------------------------------------------------
+      # ধাপ ৩: প্রতিটা আয়াতের ক্লিপ বানানো (background loop + overlay + audio)
+      # ---------------------------------------------------------
+      - name: Build per-ayah clips and merge
+        env:
+          AUDIO_DIR: ${{ inputs.audio_folder }}
+          SURAH: ${{ inputs.surah_number }}
+        run: |
           TEMP_VIDEO_DIR="temp_${SURAH}_videos"
           FINAL_DIR="rizwanSurahVideo"
+          BG_NORMALIZED="normalized/background_normalized.mp4"
 
           mkdir -p "$TEMP_VIDEO_DIR" "$FINAL_DIR"
 
-          # ব্যাকগ্রাউন্ড ভিডিওর রেজোলিউশন বের করা (overlay PNG এর সাথে মিলতে হবে)
-          BG_W=$(ffprobe -v error -select_streams v:0 -show_entries stream=width -of csv=p=0 "$BG_VIDEO")
-          BG_H=$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 "$BG_VIDEO")
-          echo "Background resolution: ${BG_W}x${BG_H}"
-
-          for overlay_file in "$OVERLAY_DIR"/${SURAH}*.png; do
+          for overlay_file in overlays/${SURAH}*.png; do
             [ -e "$overlay_file" ] || continue
             base=$(basename "$overlay_file" .png)
             audio_file="$AUDIO_DIR/$base.mp3"
@@ -62,15 +327,14 @@ jobs:
               continue
             fi
 
-            AUDIO_DUR=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$audio_file")
-            echo "Processing $base | audio duration: ${AUDIO_DUR}s"
+            echo "Processing $base"
 
-            # background.mp4 লুপ হতে থাকবে যতক্ষণ না অডিও শেষ হয় (-shortest দিয়ে অডিওর length এ কাট হবে)
+            # background loop hote thakbe jotokkhon na audio shesh hoy (-shortest diye audio er length e cut hobe)
             ffmpeg -y -hide_banner -loglevel error \
-              -stream_loop -1 -i "$BG_VIDEO" \
+              -stream_loop -1 -i "$BG_NORMALIZED" \
               -loop 1 -i "$overlay_file" \
               -i "$audio_file" \
-              -filter_complex "[0:v]scale=${BG_W}:${BG_H},setsar=1,fps=30[bg];[bg][1:v]overlay=0:0:shortest=1[outv]" \
+              -filter_complex "[0:v][1:v]overlay=0:0:shortest=1[outv]" \
               -map "[outv]" -map 2:a \
               -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p \
               -c:a aac -b:a 192k \
@@ -79,11 +343,10 @@ jobs:
           done
 
           if ! ls "$TEMP_VIDEO_DIR"/${SURAH}*.mp4 1> /dev/null 2>&1; then
-            echo "No clips generated for Surah $SURAH"
+            echo "Kono clip toiri hoyni Surah $SURAH er jonno - overlay ba audio file check koro"
             exit 1
           fi
 
-          # concat list বানানো (সব ক্লিপের resolution/codec একই তাই সরাসরি concat demuxer)
           ls -1 "$TEMP_VIDEO_DIR"/${SURAH}*.mp4 | sort -V | while read f; do
             echo "file '$(realpath "$f")'"
           done > concat_list.txt
@@ -94,7 +357,7 @@ jobs:
             "$FINAL_DIR/${SURAH}.mp4"
 
           ls -lh "$FINAL_DIR"/
-          rm -rf "$TEMP_VIDEO_DIR" concat_list.txt
+          rm -rf "$TEMP_VIDEO_DIR" concat_list.txt normalized
 
       - name: Upload Final Video
         uses: actions/upload-artifact@v4
@@ -102,10 +365,10 @@ jobs:
           name: Surah-${{ inputs.surah_number }}-4K-Video
           path: rizwanSurahVideo/
 
-      - name: Commit Video to Repo
+      - name: Commit outputs to repo
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add -f rizwanSurahVideo/
-          git commit -m "Added Surah ${{ inputs.surah_number }} 4K Video with looping background" || echo "No changes"
+          git add -f overlays/ rizwanSurahVideo/
+          git commit -m "Surah ${{ inputs.surah_number }}: overlays + final 4K video (all-in-one)" || echo "No changes"
           git push || echo "Push failed - file >100MB, use Artifact"
