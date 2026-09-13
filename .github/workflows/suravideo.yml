@@ -8,11 +8,12 @@ on:
         required: true
         type: string
       arabic_name:
-        description: 'আরবি সূরার নাম (উপরে থাকবে)'
-        required: true
+        description: 'আরবি সূরার নাম (এখন ছবিতে দেখানো হয় না, তবু রাখা হয়েছে ভবিষ্যতের জন্য)'
+        required: false
+        default: ''
         type: string
       bangla_name:
-        description: 'বাংলা সূরার নাম (নিচে থাকবে)'
+        description: 'বাংলা সূরার নাম (পিল ব্যাজে দেখাবে)'
         required: true
         type: string
       background_video:
@@ -26,14 +27,14 @@ on:
         default: 'rizwanaudio'
         type: string
       target_width:
-        description: 'Target video width'
-        required: false
-        default: '3840'
-        type: string
-      target_height:
-        description: 'Target video height'
+        description: 'Target video width (9:16 পোর্ট্রেট 4K)'
         required: false
         default: '2160'
+        type: string
+      target_height:
+        description: 'Target video height (9:16 পোর্ট্রেট 4K)'
+        required: false
+        default: '3840'
         type: string
 
 jobs:
@@ -52,6 +53,7 @@ jobs:
 
       # ---------------------------------------------------------
       # ধাপ ১: শুধু নির্দিষ্ট সূরার আয়াতগুলোর জন্য transparent overlay বানানো
+      # (পোর্ট্রেট 9:16 ডিজাইন: পিল ব্যাজ + গোল আয়াত-নম্বর ব্যাজ + আরবি/বাংলা বার)
       # ---------------------------------------------------------
       - name: Generate Overlays for this Surah
         env:
@@ -60,6 +62,297 @@ jobs:
           SURAH_NUMBER: ${{ inputs.surah_number }}
           TARGET_W: ${{ inputs.target_width }}
           TARGET_H: ${{ inputs.target_height }}
+        run: |
+          python3 << 'PY'
+          from PIL import Image, ImageDraw, ImageFont
+          import json, os, re
+
+          DATA = "src/data.json"
+          OUT = "overlays"
+          FONT_BN = "src/solaimanlipi.ttf"
+          FONT_AR = "src/noorehuda.ttf"
+
+          W = int(os.environ.get("TARGET_W", "2160"))
+          H = int(os.environ.get("TARGET_H", "3840"))
+          SCALE = W / 1080.0
+
+          SURAH_NUMBER = int(os.environ.get("SURAH_NUMBER", "0"))
+          BN_NAME = os.environ.get("BANGLA_NAME", "").strip()
+          # ARABIC_NAME env kept for future use, intentionally not drawn.
+
+          os.makedirs(OUT, exist_ok=True)
+
+          EN_TO_BN = str.maketrans("0123456789", "০১২৩৪৫৬৭৮৯")
+          def to_bangla_num(s): return str(s).translate(EN_TO_BN)
+
+          def extract_number(s):
+              s = str(s).translate(str.maketrans("০১২৩৪৫৬৭৮৯", "0123456789"))
+              m = re.search(r'\d+', s)
+              return int(m.group()) if m else 0
+
+          def normalize_arabic_display(text):
+              return text.replace('\u0671', '\u0627')
+
+          def get_font(is_ar, px_size):
+              p = FONT_AR if is_ar else FONT_BN
+              try:
+                  return ImageFont.truetype(p, max(1, int(px_size)))
+              except Exception:
+                  return ImageFont.load_default()
+
+          def wrap_text(draw, text, font, max_w):
+              lines, cur = [], ""
+              for w in text.split():
+                  test = f"{cur} {w}".strip()
+                  if draw.textlength(test, font=font) <= max_w:
+                      cur = test
+                  else:
+                      if cur:
+                          lines.append(cur)
+                      cur = w
+              if cur:
+                  lines.append(cur)
+              return lines
+
+          def draw_stroked(draw, xy, text, font, fill, stroke=(255, 255, 255, 220)):
+              draw.text(xy, text, font=font, fill=fill,
+                        stroke_width=max(1, int(font.size * 0.045)), stroke_fill=stroke)
+
+          def draw_centered(draw, cx, y, text, font, fill, stroke=(255, 255, 255, 220)):
+              w = draw.textlength(text, font=font)
+              draw_stroked(draw, (cx - w / 2, y), text, font, fill, stroke)
+
+          # ---------- style constants (tweak freely) ----------
+          SIDE_MARGIN     = int(50 * SCALE)
+          MAX_TEXT_W      = W - 2 * SIDE_MARGIN
+          BOTTOM_MARGIN   = int(90 * SCALE)
+          TOP_LIMIT       = int(H * 0.30)
+          MAX_BLOCK_RATIO = 0.60
+
+          PILL_BG    = (255, 255, 255, 235)
+          PILL_TEXT  = (25, 25, 35, 255)
+          BADGE_BG   = (32, 92, 210, 255)
+          BADGE_TEXT = (255, 255, 255, 255)
+          BAR_BG     = (12, 14, 26, 175)
+          WHITE      = (255, 255, 255, 255)
+          GOLD       = (255, 224, 130, 255)
+
+          BASE_PILL_FONT  = 34
+          BASE_BADGE_FONT = 38
+          BASE_AR_FONT    = 58
+          BASE_LABEL_FONT = 28
+          BASE_BN_FONT    = 40
+          FONT_FLOOR      = 22
+          GAP             = int(26 * SCALE)
+          BAR_PAD_X       = int(34 * SCALE)
+          BAR_PAD_Y       = int(22 * SCALE)
+          BADGE_PAD_X     = int(26 * SCALE)
+          # ------------------------------------------------------
+
+          with open(DATA, encoding="utf-8") as f:
+              data = json.load(f)
+
+          data = [it for it in data if extract_number(it.get('sura', '0')) == SURAH_NUMBER]
+          print(f"Found {len(data)} ayahs for surah {SURAH_NUMBER}")
+
+          _dummy = ImageDraw.Draw(Image.new("RGBA", (10, 10)))
+
+          for item in data:
+              sura_int = extract_number(item.get('sura', '0'))
+              ayat_int = extract_number(item.get('verses', '0'))
+              filename = f"{sura_int:03d}{ayat_int:03d}.png"
+              ayat_disp = to_bangla_num(ayat_int)
+
+              arabic_text = normalize_arabic_display(item.get('names', '').strip())
+              bangla_translation = item.get('name', '').strip()
+              bangla_translation = re.sub(r'\s*\(\s*[0-9০-৯]+\s*\)', '', bangla_translation)
+              bangla_translation = re.sub(r'\s{2,}', ' ', bangla_translation).strip()
+
+              pill_text = f"সূরা {BN_NAME}".strip()
+
+              ar_size, bn_size = BASE_AR_FONT, BASE_BN_FONT
+              label_size = BASE_LABEL_FONT
+              pill_size, badge_size = BASE_PILL_FONT, BASE_BADGE_FONT
+
+              while True:
+                  f_pill  = get_font(False, pill_size * SCALE)
+                  f_badge = get_font(False, badge_size * SCALE)
+                  f_ar    = get_font(True, ar_size * SCALE)
+                  f_label = get_font(False, label_size * SCALE)
+                  f_bn    = get_font(False, bn_size * SCALE)
+
+                  max_pill_w = W * 0.55
+                  while _dummy.textlength(pill_text, font=f_pill) > max_pill_w and pill_size > FONT_FLOOR:
+                      pill_size -= 2
+                      f_pill = get_font(False, pill_size * SCALE)
+
+                  badge_diam = int(f_pill.size * 2.3)
+
+                  ar_lines = wrap_text(_dummy, arabic_text, f_ar, MAX_TEXT_W - 2 * BAR_PAD_X)
+                  bn_lines = wrap_text(_dummy, bangla_translation, f_bn, MAX_TEXT_W - 2 * BAR_PAD_X)
+
+                  badge_row_h = badge_diam + GAP
+                  ar_bar_h    = len(ar_lines) * int(f_ar.size * 1.5) + 2 * BAR_PAD_Y
+                  label_h     = int(f_label.size * 1.4)
+                  bn_bar_h    = label_h + len(bn_lines) * int(f_bn.size * 1.45) + 2 * BAR_PAD_Y
+
+                  total_h = badge_row_h + GAP + ar_bar_h + GAP + bn_bar_h
+
+                  if total_h <= H * MAX_BLOCK_RATIO or (ar_size <= FONT_FLOOR and bn_size <= FONT_FLOOR):
+                      break
+                  ar_size = max(FONT_FLOOR, ar_size - 2)
+                  bn_size = max(FONT_FLOOR, bn_size - 2)
+                  label_size = max(FONT_FLOOR - 4, label_size - 1)
+
+              block_bottom = H - BOTTOM_MARGIN
+              block_top = block_bottom - total_h
+              block_top = max(TOP_LIMIT, block_top)
+
+              bg = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+              draw = ImageDraw.Draw(bg)
+
+              y = block_top
+              cx = W // 2
+
+              pill_w = _dummy.textlength(pill_text, font=f_pill) + 2 * BADGE_PAD_X
+              pill_h = badge_diam
+              row_total_w = pill_w + badge_diam * 0.6
+              row_left = cx - row_total_w / 2
+
+              pill_box = [row_left, y, row_left + pill_w, y + pill_h]
+              draw.rounded_rectangle(pill_box, radius=pill_h // 2, fill=PILL_BG)
+              ptx = row_left + BADGE_PAD_X
+              pty = y + (pill_h - f_pill.size) / 2 - int(6 * SCALE)
+              draw.text((ptx, pty), pill_text, font=f_pill, fill=PILL_TEXT)
+
+              circle_cx = row_left + pill_w - badge_diam * 0.35
+              circle_box = [circle_cx, y, circle_cx + badge_diam, y + badge_diam]
+              draw.ellipse(circle_box, fill=BADGE_BG)
+              draw_centered(draw, circle_cx + badge_diam / 2, y + (badge_diam - f_badge.size) / 2 - int(4 * SCALE),
+                            ayat_disp, f_badge, BADGE_TEXT, stroke=BADGE_BG)
+
+              y += badge_row_h + GAP
+
+              bar_box = [SIDE_MARGIN, y, W - SIDE_MARGIN, y + ar_bar_h]
+              draw.rounded_rectangle(bar_box, radius=int(18 * SCALE), fill=BAR_BG)
+              ty = y + BAR_PAD_Y
+              for line in ar_lines:
+                  draw_centered(draw, cx, ty, line, f_ar, WHITE)
+                  ty += int(f_ar.size * 1.5)
+
+              y += ar_bar_h + GAP
+
+              bar_box2 = [SIDE_MARGIN, y, W - SIDE_MARGIN, y + bn_bar_h]
+              draw.rounded_rectangle(bar_box2, radius=int(18 * SCALE), fill=BAR_BG)
+              ty = y + BAR_PAD_Y
+              draw_centered(draw, cx, ty, "কানযুল ঈমান থেকে অনুবাদ:", f_label, GOLD)
+              ty += label_h
+              for line in bn_lines:
+                  draw_centered(draw, cx, ty, line, f_bn, WHITE)
+                  ty += int(f_bn.size * 1.45)
+
+              bg.save(os.path.join(OUT, filename))
+              print(f"Done {filename} | AR font {ar_size} BN font {bn_size}")
+          PY
+
+      # ---------------------------------------------------------
+      # ধাপ ২: background ভিডিওর resolution চেক করে দরকার হলে বাড়ানো
+      # ---------------------------------------------------------
+      - name: Normalize background video resolution (upscale if needed)
+        env:
+          BG_VIDEO: ${{ inputs.background_video }}
+          TARGET_W: ${{ inputs.target_width }}
+          TARGET_H: ${{ inputs.target_height }}
+        run: |
+          BG_W=$(ffprobe -v error -select_streams v:0 -show_entries stream=width -of csv=p=0 "$BG_VIDEO")
+          BG_H=$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 "$BG_VIDEO")
+          echo "Original background: ${BG_W}x${BG_H} | Target: ${TARGET_W}x${TARGET_H}"
+
+          mkdir -p normalized
+
+          if [ "$BG_W" -lt "$TARGET_W" ] || [ "$BG_H" -lt "$TARGET_H" ]; then
+            echo "Resolution kom ache - upscaling + center-crop kore target size e fit korano hocche..."
+          else
+            echo "Resolution already target er soman ba beshi - normalize/crop kore fit korano hocche..."
+          fi
+
+          ffmpeg -y -hide_banner -loglevel error \
+            -i "$BG_VIDEO" \
+            -vf "scale=${TARGET_W}:${TARGET_H}:force_original_aspect_ratio=increase,crop=${TARGET_W}:${TARGET_H},setsar=1,fps=30" \
+            -c:v libx264 -preset medium -crf 16 -pix_fmt yuv420p \
+            -an \
+            normalized/background_normalized.mp4
+
+          ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 normalized/background_normalized.mp4
+
+      # ---------------------------------------------------------
+      # ধাপ ৩: প্রতিটা আয়াতের ক্লিপ বানানো (background loop + overlay + audio)
+      # ---------------------------------------------------------
+      - name: Build per-ayah clips and merge
+        env:
+          AUDIO_DIR: ${{ inputs.audio_folder }}
+          SURAH: ${{ inputs.surah_number }}
+        run: |
+          TEMP_VIDEO_DIR="temp_${SURAH}_videos"
+          FINAL_DIR="rizwanSurahVideo"
+          BG_NORMALIZED="normalized/background_normalized.mp4"
+
+          mkdir -p "$TEMP_VIDEO_DIR" "$FINAL_DIR"
+
+          for overlay_file in overlays/${SURAH}*.png; do
+            [ -e "$overlay_file" ] || continue
+            base=$(basename "$overlay_file" .png)
+            audio_file="$AUDIO_DIR/$base.mp3"
+
+            if [ ! -f "$audio_file" ]; then
+              echo "Audio missing: $audio_file - Skipping"
+              continue
+            fi
+
+            echo "Processing $base"
+
+            ffmpeg -y -hide_banner -loglevel error \
+              -stream_loop -1 -i "$BG_NORMALIZED" \
+              -loop 1 -i "$overlay_file" \
+              -i "$audio_file" \
+              -filter_complex "[0:v][1:v]overlay=0:0:shortest=1[outv]" \
+              -map "[outv]" -map 2:a \
+              -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p \
+              -c:a aac -b:a 192k \
+              -shortest \
+              "$TEMP_VIDEO_DIR/$base.mp4"
+          done
+
+          if ! ls "$TEMP_VIDEO_DIR"/${SURAH}*.mp4 1> /dev/null 2>&1; then
+            echo "Kono clip toiri hoyni Surah $SURAH er jonno - overlay ba audio file check koro"
+            exit 1
+          fi
+
+          ls -1 "$TEMP_VIDEO_DIR"/${SURAH}*.mp4 | sort -V | while read f; do
+            echo "file '$(realpath "$f")'"
+          done > concat_list.txt
+
+          ffmpeg -y -hide_banner -loglevel error \
+            -f concat -safe 0 -i concat_list.txt \
+            -c copy \
+            "$FINAL_DIR/${SURAH}.mp4"
+
+          ls -lh "$FINAL_DIR"/
+          rm -rf "$TEMP_VIDEO_DIR" concat_list.txt normalized
+
+      - name: Upload Final Video
+        uses: actions/upload-artifact@v4
+        with:
+          name: Surah-${{ inputs.surah_number }}-Portrait-Video
+          path: rizwanSurahVideo/
+
+      - name: Commit outputs to repo
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add -f overlays/ rizwanSurahVideo/
+          git commit -m "Surah ${{ inputs.surah_number }}: portrait overlays + final video (all-in-one)" || echo "No changes"
+          git push || echo "Push failed - file >100MB, use Artifact"}}
         run: |
           python3 << 'PY'
           from PIL import Image, ImageDraw, ImageFont
