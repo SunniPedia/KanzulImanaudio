@@ -17,7 +17,7 @@ on:
         required: true
         type: string
       background_video:
-        description: 'Background video path (repo-এর ভেতরের ফাইল) অথবা সরাসরি ডাউনলোডযোগ্য URL (http/https)। খালি রাখলে ডিফল্ট src/background.mp4 ব্যবহার হবে।'
+        description: 'এক বা একাধিক Background video - repo-এর ভেতরের পাথ এবং/অথবা সরাসরি ডাউনলোডযোগ্য URL (http/https), একাধিক হলে কমা (,) দিয়ে আলাদা করুন। যেমন: src/bg1.mp4, https://example.com/bg2.mp4 - এগুলো ক্রমানুসারে জোড়া লেগে একটাই ব্যাকগ্রাউন্ড ভিডিও হবে। খালি রাখলে ডিফল্ট src/background.mp4 ব্যবহার হবে।'
         required: false
         default: 'src/background.mp4'
         type: string
@@ -57,38 +57,56 @@ jobs:
           sudo apt-get update && sudo apt-get install -y ffmpeg
 
       # ---------------------------------------------------------
-      # ধাপ ০: background_video ইনপুট চেক - URL হলে ডাউনলোড করা,
-      # খালি/লোকাল পাথ হলে ডিফল্ট/দেওয়া পাথ ব্যবহার করা
+      # ধাপ ০: background_video ইনপুট চেক - এক বা একাধিক (কমা দিয়ে আলাদা)
+      # পাথ/URL থাকতে পারে। URL হলে ডাউনলোড, লোকাল হলে সরাসরি ব্যবহার।
+      # সবগুলোর একটা লিস্ট (bg_list.txt) বানানো হয়, পরের ধাপে merge হবে।
       # ---------------------------------------------------------
-      - name: Resolve background video (download if URL)
+      - name: Resolve background video(s) (download if URL, supports multiple)
         id: resolve_bg
         env:
           BG_INPUT: ${{ inputs.background_video }}
         run: |
           set -e
-          BG="${BG_INPUT:-src/background.mp4}"
+          mkdir -p downloaded
+          > bg_list.txt
 
-          if [[ "$BG" == http://* || "$BG" == https://* ]]; then
-            echo "Link দেওয়া আছে, ডাউনলোড করা হচ্ছে: $BG"
-            mkdir -p downloaded
-            EXT="${BG##*.}"
-            case "$EXT" in
-              mp4|mov|mkv|webm) OUT_FILE="downloaded/background.$EXT" ;;
-              *) OUT_FILE="downloaded/background.mp4" ;;
-            esac
+          IFS=',' read -ra ITEMS <<< "${BG_INPUT:-src/background.mp4}"
+          COUNT=0
+          for RAW in "${ITEMS[@]}"; do
+            ITEM=$(echo "$RAW" | xargs)  # trim leading/trailing space
+            [ -z "$ITEM" ] && continue
+            COUNT=$((COUNT+1))
 
-            curl -L -f --retry 3 --retry-delay 5 -o "$OUT_FILE" "$BG"
+            if [[ "$ITEM" == http://* || "$ITEM" == https://* ]]; then
+              echo "Link দেওয়া আছে ($COUNT), ডাউনলোড করা হচ্ছে: $ITEM"
+              EXT="${ITEM##*.}"
+              case "$EXT" in
+                mp4|mov|mkv|webm) OUT_FILE="downloaded/bg_${COUNT}.$EXT" ;;
+                *) OUT_FILE="downloaded/bg_${COUNT}.mp4" ;;
+              esac
 
-            if [ ! -s "$OUT_FILE" ]; then
-              echo "Download failed ba empty file - default local video use kora hocche"
-              OUT_FILE="src/background.mp4"
+              if curl -L -f --retry 3 --retry-delay 5 -o "$OUT_FILE" "$ITEM" && [ -s "$OUT_FILE" ]; then
+                echo "$OUT_FILE" >> bg_list.txt
+              else
+                echo "Download failed for: $ITEM - skip kora hocche"
+              fi
+            else
+              if [ -f "$ITEM" ]; then
+                echo "Local path use kora hocche ($COUNT): $ITEM"
+                echo "$ITEM" >> bg_list.txt
+              else
+                echo "Local file paoa jayni: $ITEM - skip kora hocche"
+              fi
             fi
+          done
 
-            echo "BG_RESOLVED=$OUT_FILE" >> "$GITHUB_ENV"
-          else
-            echo "Link deya nei - local path use kora hocche: $BG"
-            echo "BG_RESOLVED=$BG" >> "$GITHUB_ENV"
+          if [ ! -s bg_list.txt ]; then
+            echo "Kono valid background video paoa jayni - default src/background.mp4 use kora hocche"
+            echo "src/background.mp4" > bg_list.txt
           fi
+
+          echo "Resolved background video list:"
+          cat bg_list.txt
 
       # ---------------------------------------------------------
       # ধাপ ১: শুধু নির্দিষ্ট সূরার আয়াতগুলোর জন্য transparent overlay বানানো
@@ -331,31 +349,40 @@ jobs:
           PY
 
       # ---------------------------------------------------------
-      # ধাপ ২: background ভিডিওর resolution চেক করে দরকার হলে বাড়ানো
+      # ধাপ ২: প্রতিটা background ভিডিও আলাদাভাবে normalize (resolution/fps
+      # এক করা) করে, তারপর সবগুলো ক্রমানুসারে concat করে একটা একক
+      # ব্যাকগ্রাউন্ড ভিডিও বানানো হয় (একটা দিলে সেটাই normalize হয়ে যাবে)
       # ---------------------------------------------------------
-      - name: Normalize background video resolution (upscale if needed)
+      - name: Normalize & merge background video(s)
         env:
-          BG_VIDEO: ${{ env.BG_RESOLVED }}
           TARGET_W: ${{ inputs.target_width }}
           TARGET_H: ${{ inputs.target_height }}
         run: |
-          BG_W=$(ffprobe -v error -select_streams v:0 -show_entries stream=width -of csv=p=0 "$BG_VIDEO")
-          BG_H=$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 "$BG_VIDEO")
-          echo "Original background: ${BG_W}x${BG_H} | Target: ${TARGET_W}x${TARGET_H}"
-
           mkdir -p normalized
+          > normalize_concat_list.txt
 
-          if [ "$BG_W" -lt "$TARGET_W" ] || [ "$BG_H" -lt "$TARGET_H" ]; then
-            echo "Resolution kom ache - upscaling + center-crop kore target size e fit korano hocche..."
-          else
-            echo "Resolution already target er soman ba beshi - normalize/crop kore fit korano hocche..."
-          fi
+          i=0
+          while IFS= read -r BG_VIDEO; do
+            i=$((i+1))
+            BG_W=$(ffprobe -v error -select_streams v:0 -show_entries stream=width -of csv=p=0 "$BG_VIDEO")
+            BG_H=$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 "$BG_VIDEO")
+            echo "[$i] $BG_VIDEO -> Original: ${BG_W}x${BG_H} | Target: ${TARGET_W}x${TARGET_H}"
 
+            OUT="normalized/part_${i}.mp4"
+            ffmpeg -y -hide_banner -loglevel error \
+              -i "$BG_VIDEO" \
+              -vf "scale=${TARGET_W}:${TARGET_H}:force_original_aspect_ratio=increase,crop=${TARGET_W}:${TARGET_H},setsar=1,fps=30" \
+              -c:v libx264 -preset medium -crf 16 -pix_fmt yuv420p \
+              -an \
+              "$OUT"
+
+            echo "file '$(realpath "$OUT")'" >> normalize_concat_list.txt
+          done < bg_list.txt
+
+          echo "Merging $i background video(s) into one..."
           ffmpeg -y -hide_banner -loglevel error \
-            -i "$BG_VIDEO" \
-            -vf "scale=${TARGET_W}:${TARGET_H}:force_original_aspect_ratio=increase,crop=${TARGET_W}:${TARGET_H},setsar=1,fps=30" \
-            -c:v libx264 -preset medium -crf 16 -pix_fmt yuv420p \
-            -an \
+            -f concat -safe 0 -i normalize_concat_list.txt \
+            -c copy \
             normalized/background_normalized.mp4
 
           ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 normalized/background_normalized.mp4
