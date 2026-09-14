@@ -31,7 +31,7 @@ jobs:
         run: |
           python3 << 'PY'
           from PIL import Image, ImageDraw, ImageFont
-          import json, os, re, shutil
+          import json, os, re, shutil, unicodedata
 
           BG="src/background.jpg"
           LOGO="src/logo.jpg"
@@ -59,6 +59,26 @@ jobs:
           def clean_name(text):
               text = re.sub(r'\s*\(\s*[0-9০-৯]+\s*\)', '', text)
               return re.sub(r'\s{2,}', ' ', text).strip()
+
+          def has_arabic_letter(word):
+              # আয়াত-শেষের গোল নম্বর চিহ্ন (۝ + অঙ্ক, কখনো তার আগে waqf mark যেমন 'لا')
+              # এ কোনো মূল অক্ষর (letter) থাকে না — শুধু combining mark/digit/symbol থাকে।
+              # এই ফাংশন দিয়ে সেটা শনাক্ত করে আলাদা করা হয়।
+              return any(unicodedata.category(ch).startswith('L') for ch in word)
+
+          def merge_marker_tokens(words):
+              # স্পেস দিয়ে ভাঙা শব্দগুলোর মধ্যে যেগুলোতে কোনো আসল অক্ষর নেই (যেমন আয়াত নম্বরের
+              # গোল চিহ্ন/waqf mark), সেগুলো সবসময় আগের আসল শব্দের সাথে জোড়া লাগিয়ে দেওয়া হয়।
+              # ফলে wrap হওয়ার সময় এই চিহ্নটা কখনোই একা নতুন লাইনে পড়বে না (একা পড়লেই এর
+              # glyph shaping ভেঙে যায়/box আকারে দেখায়) — বরং শেষ শব্দের সাথেই এক টুকরো হয়ে
+              # যেকোনো লাইনে যাবে, ফলে শেপিং সবসময় ঠিক থাকবে।
+              merged=[]
+              for w in words:
+                  if merged and not has_arabic_letter(w):
+                      merged[-1] = merged[-1] + w
+                  else:
+                      merged.append(w)
+              return merged
 
           # ---- Background: TARGET_W 3840 fixed ----
           TARGET_W = 3840
@@ -205,8 +225,9 @@ jobs:
               _calc_draw = ImageDraw.Draw(Image.new("RGB",(10,10)))
 
               arabic_raw=normalize_arabic_display(item.get('names','').strip())
+              _ar_words = merge_marker_tokens(arabic_raw.split())
               arabic_lines=[]; cur=""
-              for w in arabic_raw.split():
+              for w in _ar_words:
                   test=f"{cur} {w}".strip()
                   if _calc_draw.textlength(test, font=f_ar) <= max_w:
                       cur=test
@@ -301,5 +322,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -f output/
-          git commit -m "fix: colon glyphs vertically centered (sura/ayat/onubad)" || echo "no changes"
+          git commit -m "fix: ayah-end marker glyph no longer breaks when wrapped alone on new line" || echo "no changes"
           git push
