@@ -584,9 +584,12 @@ jobs:
 
       # ---------------------------------------------------------
       # ধাপ ৪: প্রতিটা আয়াতের ক্লিপ বানানো (boomerang background + animated
-      # webm overlay + audio)। background-এর running offset লজিক আগের
-      # মতোই অক্ষত - শুধু normal loop-এর বদলে boomerang সেগমেন্ট লুপ হচ্ছে,
-      # এবং static PNG-র বদলে animated webm overlay হচ্ছে।
+      # webm overlay + audio)। background-এর running offset এখন
+      # background_playback.mp4 এর প্রকৃত দৈর্ঘ্য দিয়ে mod (modulo) করে
+      # নেওয়া হচ্ছে - এটাই মূল ফিক্স। আগে OFFSET শুধু বাড়তেই থাকত এবং
+      # background_playback.mp4-এর দৈর্ঘ্য ছাড়িয়ে গেলে -ss সেই ফাইলের
+      # বাইরের সময়ে seek করত, ফলে ffmpeg ফাঁকা/কালো ফ্রেম বসিয়ে দিত -
+      # এজন্যই সূরার মাঝামাঝি বা শেষের আয়াতগুলোতে background কালো দেখাচ্ছিল।
       # ---------------------------------------------------------
       - name: Build per-ayah clips and merge
         env:
@@ -599,6 +602,9 @@ jobs:
           BG_PLAYBACK="normalized/background_playback.mp4"
 
           mkdir -p "$TEMP_VIDEO_DIR" "$FINAL_DIR"
+
+          BG_DURATION=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$BG_PLAYBACK")
+          echo "Background playback duration: ${BG_DURATION}s"
 
           OFFSET=0
 
@@ -613,10 +619,16 @@ jobs:
             fi
 
             DURATION=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$audio_file")
-            echo "Processing $base | background offset: ${OFFSET}s | audio duration: ${DURATION}s"
+
+            # OFFSET কে background duration দিয়ে mod করে নেওয়া হচ্ছে,
+            # যাতে -ss কখনো background_playback.mp4 এর দৈর্ঘ্য ছাড়িয়ে না যায়
+            # (এখানেই আগে কালো background-এর সমস্যা হচ্ছিল)
+            OFFSET_MOD=$(awk -v o="$OFFSET" -v d="$BG_DURATION" 'BEGIN{ if(d<=0){print 0} else {print o - d*int(o/d)} }')
+
+            echo "Processing $base | background offset: ${OFFSET_MOD}s (raw total=${OFFSET}s) | audio duration: ${DURATION}s"
 
             ffmpeg -y -hide_banner -loglevel error \
-              -ss "$OFFSET" -stream_loop -1 -i "$BG_PLAYBACK" \
+              -ss "$OFFSET_MOD" -stream_loop -1 -i "$BG_PLAYBACK" \
               -i "$overlay_file" \
               -i "$audio_file" \
               -filter_complex "[1:v]format=yuva420p[ov];[0:v][ov]overlay=0:0:shortest=1[outv]" \
