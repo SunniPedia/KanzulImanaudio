@@ -391,6 +391,50 @@ jobs:
           ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 normalized/background_normalized.mp4
 
       # ---------------------------------------------------------
+      # ধাপ ২.৫: normalize/merge করা background video থেকে একটা
+      # seamless "ping-pong" (forward + reverse) ভিডিও বানানো হচ্ছে।
+      #
+      # কেন: পরের ধাপে background video-কে "-stream_loop -1" দিয়ে
+      # বারবার লুপ করানো হয়। প্লেইন background loop করলে ভিডিও শেষ
+      # প্রান্তে পৌঁছেই হঠাৎ শুরুতে (0:00) জাম্প করে - যেটা দেখতে
+      # অস্বাভাবিক/ঝাঁকুনি লাগে।
+      #
+      # সমাধান: background_normalized.mp4 -কে reverse করে
+      # background_reversed.mp4 বানানো হয়, তারপর দুটো concat করে
+      # (forward + reverse) একটা background_pingpong.mp4 বানানো হয়।
+      # এই ফাইলটা loop করালে: forward শেষ হলে reverse শুরু হয়ে একই
+      # ফ্রেম থেকে পেছনের দিকে চলে (কোনো জাম্প নেই), আবার reverse শেষে
+      # (frame 0) পরের লুপের forward শুরুও frame 0 থেকেই হয় (কোনো
+      # জাম্প নেই) - ফলে পুরোপুরি seamless লুপ হয়।
+      #
+      # নোট: "reverse" ফিল্টার পুরো ভিডিও মেমরিতে লোড করে, তাই খুব
+      # লম্বা/ভারী background video হলে runner-এর RAM কম পড়তে পারে।
+      # ---------------------------------------------------------
+      - name: Create seamless ping-pong (forward+reverse) background
+        run: |
+          set -e
+          echo "Background video reverse kore ping-pong loop banano hocche (jate loop wrap howar somoy hothat jump na hoy, borong reverse hoye fire ashe)..."
+
+          ffmpeg -y -hide_banner -loglevel error \
+            -i normalized/background_normalized.mp4 \
+            -vf "reverse" -an \
+            -c:v libx264 -preset medium -crf 16 -pix_fmt yuv420p \
+            normalized/background_reversed.mp4
+
+          echo "file '$(realpath normalized/background_normalized.mp4)'" > pingpong_concat_list.txt
+          echo "file '$(realpath normalized/background_reversed.mp4)'" >> pingpong_concat_list.txt
+
+          ffmpeg -y -hide_banner -loglevel error \
+            -f concat -safe 0 -i pingpong_concat_list.txt \
+            -c copy \
+            normalized/background_pingpong.mp4
+
+          rm -f normalized/background_reversed.mp4 pingpong_concat_list.txt
+
+          echo "Ping-pong background toiri holo, duration:"
+          ffprobe -v error -show_entries format=duration -of csv=p=0 normalized/background_pingpong.mp4
+
+      # ---------------------------------------------------------
       # ধাপ ৩: প্রতিটা আয়াতের ক্লিপ বানানো (background + overlay + audio)
       #
       # গুরুত্বপূর্ণ পরিবর্তন: আগে প্রতিটা আয়াতের ffmpeg কলে
@@ -403,9 +447,15 @@ jobs:
       # "-ss $OFFSET -stream_loop -1 -i background" ব্যবহার করা হচ্ছে -
       # ফলে background সেই cumulative timestamp থেকে চলা শুরু করে, অর্থাৎ
       # পুরো সূরা জুড়ে background একটানা/ধারাবাহিকভাবে চলবে, কোনো রিসেট
-      # ছাড়াই। background video-র নিজের দৈর্ঘ্য শেষ হয়ে গেলেও
-      # "-stream_loop -1" থাকার কারণে ffmpeg নিজে থেকেই আবার লুপ করে
-      # সঠিক জায়গা থেকে চালিয়ে যাবে (ম্যানুয়াল wraparound হিসাব লাগে না)।
+      # ছাড়াই।
+      #
+      # এবার background হিসেবে প্লেইন normalized video না, বরং আগের ধাপে
+      # বানানো background_pingpong.mp4 (forward+reverse) ব্যবহার করা
+      # হচ্ছে। ফলে ভিডিও তার শেষ প্রান্তে পৌঁছালে হঠাৎ শুরুতে জাম্প না
+      # করে বরং মসৃণভাবে reverse হয়ে আবার সামনে-পেছনে (ping-pong) চলতে
+      # থাকবে - "-stream_loop -1" থাকার কারণে ffmpeg নিজে থেকেই এই
+      # ping-pong ফাইলটা বারবার সঠিক জায়গা থেকে লুপ করে চালিয়ে যাবে
+      # (ম্যানুয়াল wraparound হিসাব লাগে না)।
       # ---------------------------------------------------------
       - name: Build per-ayah clips and merge
         env:
@@ -415,13 +465,14 @@ jobs:
           set -e
           TEMP_VIDEO_DIR="temp_${SURAH}_videos"
           FINAL_DIR="rizwanSurahVideo"
-          BG_NORMALIZED="normalized/background_normalized.mp4"
+          BG_NORMALIZED="normalized/background_pingpong.mp4"
 
           mkdir -p "$TEMP_VIDEO_DIR" "$FINAL_DIR"
 
           # background video-র চলমান (cumulative) অফসেট - প্রতিটা আয়াতের
           # পর তার অডিও দৈর্ঘ্য যোগ হয়ে বাড়তে থাকবে, যাতে background
-          # কখনো শুরু থেকে রিসেট না হয়ে ধারাবাহিকভাবে চলে।
+          # কখনো শুরু থেকে হঠাৎ রিসেট/জাম্প না হয়ে ধারাবাহিকভাবে
+          # (ping-pong সহ) চলে।
           OFFSET=0
 
           for overlay_file in $(ls overlays/${SURAH}*.png 2>/dev/null | sort -V); do
