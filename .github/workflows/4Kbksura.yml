@@ -1,4 +1,4 @@
-name: S2Rizwan Generate Surah Video (All-in-One)
+name: S2izwan Generate Surah Video (All-in-One)
 
 on:
   workflow_dispatch:
@@ -122,6 +122,7 @@ jobs:
           TARGET_W: ${{ inputs.target_width }}
           TARGET_H: ${{ inputs.target_height }}
         run: |
+          set -e
           mkdir -p normalized
           > normalize_concat_list.txt
 
@@ -130,6 +131,10 @@ jobs:
             i=$((i+1))
             BG_W=$(ffprobe -v error -select_streams v:0 -show_entries stream=width -of csv=p=0 "$BG_VIDEO")
             BG_H=$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 "$BG_VIDEO")
+            if [ -z "$BG_W" ] || [ -z "$BG_H" ]; then
+              echo "::error::$BG_VIDEO theke valid video info paoa jayni - ei background file ta corrupt/khali"
+              exit 1
+            fi
             echo "[$i] $BG_VIDEO -> Original: ${BG_W}x${BG_H} | Target: ${TARGET_W}x${TARGET_H}"
 
             OUT="normalized/part_${i}.mp4"
@@ -140,6 +145,11 @@ jobs:
               -an \
               "$OUT"
 
+            if [ ! -s "$OUT" ]; then
+              echo "::error::$OUT toiri hoyni ba khali - normalize ffmpeg command fail koreche"
+              exit 1
+            fi
+
             echo "file '$(realpath "$OUT")'" >> normalize_concat_list.txt
           done < bg_list.txt
 
@@ -148,6 +158,13 @@ jobs:
             -f concat -safe 0 -i normalize_concat_list.txt \
             -c copy \
             normalized/background_normalized.mp4
+
+          BG_DUR=$(ffprobe -v error -show_entries format=duration -of csv=p=0 normalized/background_normalized.mp4)
+          echo "Merged background duration: ${BG_DUR}s"
+          if [ -z "$BG_DUR" ] || [ "$(echo "$BG_DUR < 0.5" | bc)" = "1" ]; then
+            echo "::error::background_normalized.mp4 khub choto/khali (${BG_DUR}s) - kichu vul hoyeche"
+            exit 1
+          fi
 
           ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 normalized/background_normalized.mp4
 
@@ -193,7 +210,12 @@ jobs:
           fi
 
           cd ..
-          ffprobe -v error -show_entries format=duration -of csv=p=0 normalized/background_playback.mp4
+          BG_PLAYBACK_DUR=$(ffprobe -v error -show_entries format=duration -of csv=p=0 normalized/background_playback.mp4)
+          echo "background_playback.mp4 duration: ${BG_PLAYBACK_DUR}s"
+          if [ -z "$BG_PLAYBACK_DUR" ] || [ "$(echo "$BG_PLAYBACK_DUR < 0.5" | bc)" = "1" ]; then
+            echo "::error::background_playback.mp4 khub choto/khali - background boomerang toiri failed"
+            exit 1
+          fi
 
       # ---------------------------------------------------------
       # ধাপ ৩: শুধু নির্দিষ্ট সূরার আয়াতগুলোর জন্য "অ্যানিমেটেড" (transparent,
