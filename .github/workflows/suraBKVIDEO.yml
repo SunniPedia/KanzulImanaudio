@@ -437,25 +437,28 @@ jobs:
       # ---------------------------------------------------------
       # ধাপ ৩: প্রতিটা আয়াতের ক্লিপ বানানো (background + overlay + audio)
       #
-      # গুরুত্বপূর্ণ পরিবর্তন: আগে প্রতিটা আয়াতের ffmpeg কলে
-      # "-stream_loop -1 -i background" ব্যবহার করলে background video
-      # প্রতিবার শুরু (0:00) থেকে replay হতো - ফলে পুরো সূরার ভিডিওতে
-      # background বারবার রিসেট হয়ে যেত।
+      # আগে প্রতিটা আয়াতের ffmpeg কলে আলাদাভাবে
+      # "-ss $OFFSET -stream_loop -1 -i pingpong" ব্যবহার করা হতো।
+      # সমস্যা: বড় -ss মান আর -stream_loop -1 একসাথে দিলে ffmpeg-এর
+      # wraparound আচরণ নির্দিষ্ট (predictable) না - ফলে background
+      # এলোমেলোভাবে ঘন ঘন/আংশিক reverse-এ চলে যাচ্ছিল, পরিষ্কার
+      # "শুরু -> রিভার্স -> শুরু -> রিভার্স" প্যাটার্ন থাকছিল না।
       #
-      # এখন একটা running offset (OFFSET) রাখা হচ্ছে, যেটা প্রতিটা আয়াতের
-      # অডিও দৈর্ঘ্য অনুযায়ী বাড়তে থাকে। প্রতিটা ffmpeg কলে
-      # "-ss $OFFSET -stream_loop -1 -i background" ব্যবহার করা হচ্ছে -
-      # ফলে background সেই cumulative timestamp থেকে চলা শুরু করে, অর্থাৎ
-      # পুরো সূরা জুড়ে background একটানা/ধারাবাহিকভাবে চলবে, কোনো রিসেট
-      # ছাড়াই।
+      # সমাধান (deterministic approach):
+      #  ৩.১) আগে এই সূরার সবগুলো আয়াতের অডিও দৈর্ঘ্য যোগ করে
+      #       TOTAL_DURATION বের করা হচ্ছে।
+      #  ৩.২) ping-pong cycle (forward+reverse) কতবার লাগবে TOTAL_DURATION
+      #       কভার করতে, সেটা হিসাব করে সেই কয়েকবার loop করে একটাই
+      #       নির্দিষ্ট-দৈর্ঘ্যের, পুরোপুরি রেন্ডার করা background_full.mp4
+      #       বানানো হচ্ছে (এখানে re-encode করে frame-accurate trim করা
+      #       হয়, যাতে প্রতিটা cycle বাউন্ডারি নিখুঁত থাকে)।
+      #  ৩.৩) প্রতিটা আয়াতের ক্লিপের জন্য আর কোনো stream_loop লাগছে না -
+      #       শুধু এই একটাই পূর্ণাঙ্গ background_full.mp4 থেকে
+      #       "-ss $OFFSET" দিয়ে ক্রমান্বয়ে অংশ কেটে নেওয়া হচ্ছে।
       #
-      # এবার background হিসেবে প্লেইন normalized video না, বরং আগের ধাপে
-      # বানানো background_pingpong.mp4 (forward+reverse) ব্যবহার করা
-      # হচ্ছে। ফলে ভিডিও তার শেষ প্রান্তে পৌঁছালে হঠাৎ শুরুতে জাম্প না
-      # করে বরং মসৃণভাবে reverse হয়ে আবার সামনে-পেছনে (ping-pong) চলতে
-      # থাকবে - "-stream_loop -1" থাকার কারণে ffmpeg নিজে থেকেই এই
-      # ping-pong ফাইলটা বারবার সঠিক জায়গা থেকে লুপ করে চালিয়ে যাবে
-      # (ম্যানুয়াল wraparound হিসাব লাগে না)।
+      # ফলাফল: পুরো সূরার ভিডিও জুড়ে background ঠিক
+      # শুরু -> রিভার্স -> শুরু -> রিভার্স ... এই প্যাটার্নেই চলবে,
+      # কোনো এলোমেলো/ঘনঘন জাম্প বা আংশিক রিভার্স হবে না।
       # ---------------------------------------------------------
       - name: Build per-ayah clips and merge
         env:
@@ -465,14 +468,51 @@ jobs:
           set -e
           TEMP_VIDEO_DIR="temp_${SURAH}_videos"
           FINAL_DIR="rizwanSurahVideo"
-          BG_NORMALIZED="normalized/background_pingpong.mp4"
+          PINGPONG="normalized/background_pingpong.mp4"
+          BG_FULL="normalized/background_full.mp4"
 
           mkdir -p "$TEMP_VIDEO_DIR" "$FINAL_DIR"
 
-          # background video-র চলমান (cumulative) অফসেট - প্রতিটা আয়াতের
-          # পর তার অডিও দৈর্ঘ্য যোগ হয়ে বাড়তে থাকবে, যাতে background
-          # কখনো শুরু থেকে হঠাৎ রিসেট/জাম্প না হয়ে ধারাবাহিকভাবে
-          # (ping-pong সহ) চলে।
+          # ৩.১: এই সূরার সবগুলো আয়াতের অডিও দৈর্ঘ্য যোগ করে মোট
+          # প্রয়োজনীয় background দৈর্ঘ্য বের করা হচ্ছে।
+          TOTAL_DURATION=0
+          for overlay_file in $(ls overlays/${SURAH}*.png 2>/dev/null | sort -V); do
+            [ -e "$overlay_file" ] || continue
+            base=$(basename "$overlay_file" .png)
+            audio_file="$AUDIO_DIR/$base.mp3"
+            [ -f "$audio_file" ] || continue
+            DUR=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$audio_file")
+            TOTAL_DURATION=$(echo "$TOTAL_DURATION + $DUR" | bc)
+          done
+
+          if [ -z "$TOTAL_DURATION" ] || [ "$(echo "$TOTAL_DURATION <= 0" | bc)" -eq 1 ]; then
+            echo "Kono audio duration paoa jayni Surah $SURAH er jonno - overlay/audio folder check koro"
+            exit 1
+          fi
+          echo "Total surah audio duration: ${TOTAL_DURATION}s"
+
+          # ৩.২: ping-pong cycle (forward+reverse) কতবার loop করলে পুরো
+          # সূরার দৈর্ঘ্য কাভার হবে সেটা বের করে, একটা নির্দিষ্ট
+          # দৈর্ঘ্যের পূর্ণাঙ্গ background বানানো হচ্ছে (একটু বাড়তি buffer
+          # সহ, তারপর ঠিক TOTAL_DURATION পর্যন্ত ট্রিম করা হয়)।
+          CYCLE_DURATION=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$PINGPONG")
+          LOOP_COUNT=$(awk -v t="$TOTAL_DURATION" -v c="$CYCLE_DURATION" 'BEGIN{n=t/c; if (n<1) n=1; printf "%d", n+3}')
+          echo "Ping-pong cycle duration: ${CYCLE_DURATION}s | Loop count: $LOOP_COUNT"
+
+          ffmpeg -y -hide_banner -loglevel error \
+            -stream_loop "$LOOP_COUNT" -i "$PINGPONG" \
+            -t "$TOTAL_DURATION" \
+            -c:v libx264 -preset medium -crf 16 -pix_fmt yuv420p \
+            -an \
+            "$BG_FULL"
+
+          echo "Full continuous ping-pong background toiri holo:"
+          ffprobe -v error -show_entries format=duration -of csv=p=0 "$BG_FULL"
+
+          # ৩.৩: এখন প্রতিটা আয়াতের ক্লিপ এই একই পূর্ণাঙ্গ background
+          # থেকে ক্রমান্বয়ে (cumulative OFFSET অনুযায়ী) কেটে নেওয়া হচ্ছে -
+          # কোনো stream_loop লাগছে না, তাই wraparound-জনিত এলোমেলো
+          # আচরণের সুযোগ নেই।
           OFFSET=0
 
           for overlay_file in $(ls overlays/${SURAH}*.png 2>/dev/null | sort -V); do
@@ -489,7 +529,7 @@ jobs:
             echo "Processing $base | background offset: ${OFFSET}s | audio duration: ${DURATION}s"
 
             ffmpeg -y -hide_banner -loglevel error \
-              -ss "$OFFSET" -stream_loop -1 -i "$BG_NORMALIZED" \
+              -ss "$OFFSET" -i "$BG_FULL" \
               -loop 1 -i "$overlay_file" \
               -i "$audio_file" \
               -filter_complex "[0:v][1:v]overlay=0:0:shortest=1[outv]" \
