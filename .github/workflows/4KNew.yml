@@ -1,4 +1,4 @@
-name: 4K Video RizwanNew+
+name: 4K Video RizwanNew++
 on:
   workflow_dispatch:
     inputs:
@@ -63,7 +63,10 @@ jobs:
           TARGET_W = int(os.environ.get("TARGET_W", "3840"))
           TARGET_H_MIN = int(os.environ.get("TARGET_H_MIN", "2160"))
 
+          max_height = TARGET_H_MIN
+
           def make_canvas_fixed_width(img_path, out_path):
+              global max_height
               img = Image.open(img_path).convert("RGB")
               W_orig, H_orig = img.size
 
@@ -86,13 +89,19 @@ jobs:
                   canvas.paste(strip.resize((TARGET_W, TARGET_H_MIN - BASE_H), Image.LANCZOS), (0, BASE_H))
                   canvas.save(out_path, "JPEG", quality=95, subsampling=0)
                   print(f"[INFO] Extended height {H} -> {TARGET_H_MIN} for {os.path.basename(img_path)}")
+                  final_h = TARGET_H_MIN
               else:
                   # Height already >= 2160, keep as is (লম্বা আয়াত কাটবে না)
                   # Even height for ffmpeg yuv420p
                   if H % 2 != 0:
                       img = img.resize((TARGET_W, H+1), Image.LANCZOS)
+                      H = H + 1
                   img.save(out_path, "JPEG", quality=95, subsampling=0)
                   print(f"[INFO] Kept height {H} for {os.path.basename(img_path)}")
+                  final_h = H
+
+              if final_h > max_height:
+                  max_height = final_h
 
           pattern = os.path.join(IMG_DIR, f"{SURAH}*.jpg")
           for p in sorted(glob.glob(pattern)):
@@ -100,9 +109,21 @@ jobs:
               out = os.path.join(TEMP_IMG_DIR, base)
               make_canvas_fixed_width(p, out)
 
+          if max_height % 2 != 0:
+              max_height += 1
+
+          with open("max_height.txt", "w") as f:
+              f.write(str(max_height))
+
+          print(f"[INFO] Final MAX_H for all videos: {max_height}")
+
           PY
 
-          # 3. Image + Audio to Video
+          MAX_H=$(cat max_height.txt)
+          echo "Target common height (from images): $MAX_H"
+
+          # 3. Image + Audio -> Video, প্রতিটা ছবিকে background.jpg-এর উপর overlay করে
+          #    এক এক করে (একটা সময়ে একটাই ইমেজ+ব্যাকগ্রাউন্ড decode হয়, তাই মেমরি হালকা থাকে)
           for img_file in "$TEMP_IMG_DIR"/${SURAH}*.jpg; do
             [ -e "$img_file" ] || continue
             file_name=$(basename "$img_file")
@@ -116,13 +137,14 @@ jobs:
 
             echo "Processing: $file_name -> $base.mp4"
 
-            # --- FIXED PART: NO STRETCH ---
-            # আগের scale=trunc(iw/2)*2... বাদ দিয়ে শুধু pad দিয়ে even করা হয়েছে, তাই ছবি stretch হবে না
+            # --- মূল ছবি stretch হয় না; ফাঁকা জায়গা background.jpg দিয়ে ভরাট হয় (কালো বর্ডার নেই) ---
             ffmpeg -y -hide_banner -loglevel error \
+              -loop 1 -i "$BG_IMG" \
               -loop 1 -i "$img_file" \
               -i "$audio_file" \
+              -filter_complex "[0:v]scale=${TARGET_W}:${MAX_H}:force_original_aspect_ratio=increase,crop=${TARGET_W}:${MAX_H},setsar=1,fps=30[bg];[1:v]scale=${TARGET_W}:-2,setsar=1,fps=30[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2:shortest=1[outv]" \
+              -map "[outv]" -map 2:a \
               -c:v libx264 -tune stillimage -preset medium -crf 18 \
-              -vf "setsar=1,fps=30,pad=ceil(iw/2)*2:ceil(ih/2)*2:(ow-iw)/2:(oh-ih)/2:color=black@0" \
               -c:a aac -b:a 192k \
               -pix_fmt yuv420p -shortest \
               "$TEMP_VIDEO_DIR/$base.mp4"
@@ -135,57 +157,19 @@ jobs:
 
           ls -1 "$TEMP_VIDEO_DIR"/${SURAH}*.mp4 | sort -V > video_list_raw.txt
 
-          # --- সবচেয়ে বড় height বের করা (padding এর common target হিসেবে) ---
-          MAX_H=0
+          # --- Concat demuxer দিয়ে হালকা merge (সব ভিডিওর resolution/codec একই, তাই re-encode লাগে না) ---
+          : > concat_list.txt
           while read f; do
-            h=$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 "$f")
-            if [ "$h" -gt "$MAX_H" ]; then
-              MAX_H=$h
-            fi
+            printf "file '%s'\n" "$(readlink -f "$f")" >> concat_list.txt
           done < video_list_raw.txt
-          if [ $((MAX_H % 2)) -ne 0 ]; then
-            MAX_H=$((MAX_H + 1))
-          fi
-          echo "Merge target height: $MAX_H"
-
-          # --- Dynamic ffmpeg inputs + filter_complex তৈরি ---
-          # কালো বর্ডারের বদলে src/background.jpg দিয়ে ফাঁকা জায়গা ভরাট করা হয়
-          # মূল ভিডিও stretch হয় না, background.jpg ও crop করে (distortion ছাড়া) পুরো ফ্রেম ঢেকে দেয়
-          INPUTS=()
-          i=0
-          while read f; do
-            INPUTS+=(-i "$f")
-            i=$((i+1))
-          done < video_list_raw.txt
-
-          # background.jpg কে শেষ ইনপুট হিসেবে যোগ করা
-          BG_INDEX=$i
-          INPUTS+=(-loop 1 -i "$BG_IMG")
-
-          FILTER=""
-          CONCAT_PART=""
-          i=0
-          while read f; do
-            FILTER+="[$i:v]scale=3840:-2,setsar=1,fps=30[fg$i];"
-            FILTER+="[$BG_INDEX:v]scale=3840:${MAX_H}:force_original_aspect_ratio=increase,crop=3840:${MAX_H},setsar=1,fps=30[bg$i];"
-            FILTER+="[bg$i][fg$i]overlay=(W-w)/2:(H-h)/2:shortest=1[v$i];"
-            CONCAT_PART+="[v$i][$i:a]"
-            i=$((i+1))
-          done < video_list_raw.txt
-
-          FILTER+="${CONCAT_PART}concat=n=${i}:v=1:a=1[outv][outa]"
 
           ffmpeg -y -hide_banner -loglevel error \
-            "${INPUTS[@]}" \
-            -filter_complex "$FILTER" \
-            -map "[outv]" -map "[outa]" \
-            -c:v libx264 -preset medium -crf 18 \
-            -c:a aac -b:a 192k \
-            -pix_fmt yuv420p \
+            -f concat -safe 0 -i concat_list.txt \
+            -c copy \
             "$FINAL_DIR/${SURAH}.mp4"
 
           ls -lh "$FINAL_DIR"/
-          rm -rf "$TEMP_VIDEO_DIR" "$TEMP_IMG_DIR" video_list_raw.txt
+          rm -rf "$TEMP_VIDEO_DIR" "$TEMP_IMG_DIR" video_list_raw.txt concat_list.txt max_height.txt
 
       - name: Upload Final Video
         uses: actions/upload-artifact@v4
