@@ -1,0 +1,92 @@
+name: Fix MP3 Tags to Rizwan
+
+on:
+  workflow_dispatch:
+    inputs:
+      file_prefix:
+        description: 'ফাইলের শুরু'
+        required: true
+        default: '001'
+        type: string
+      metadata_value:
+        description: 'নতুন Tag'
+        required: true
+        default: 'Rizwan'
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  fix-mp3:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install mutagen
+        run: pip install mutagen
+
+      - name: Fix ID3V1, ID3V2 and Clear LyricsTag
+        run: |
+          python3 << 'PY'
+          import os
+          from mutagen.mp3 import MP3
+          from mutagen.id3 import ID3, TIT2, TPE1, TALB, TPE2, TCOM, TCON, COMM, ID3NoHeaderError
+
+          FOLDER = "rizwanaudio"
+          PREFIX = "${{ inputs.file_prefix }}"
+          META = "${{ inputs.metadata_value }}"
+
+          for fname in os.listdir(FOLDER):
+              if not fname.startswith(PREFIX):
+                  continue
+              if not fname.lower().endswith(".mp3"):
+                  continue
+
+              fpath = os.path.join(FOLDER, fname)
+              print(f"Processing: {fpath}")
+
+              try:
+                  audio = MP3(fpath, ID3=ID3)
+              except ID3NoHeaderError:
+                  audio = MP3(fpath)
+                  audio.add_tags()
+
+              if audio.tags is None:
+                  audio.add_tags()
+
+              # 1. আগের সব Tag, LyricsTag, Cover সব ডিলিট
+              audio.tags.clear()
+
+              # 2. নতুন করে সব Field এ Rizwan বসানো - ID3V2
+              audio.tags.add(TIT2(encoding=3, text=META)) # Title
+              audio.tags.add(TPE1(encoding=3, text=META)) # Artist
+              audio.tags.add(TALB(encoding=3, text=META)) # Album
+              audio.tags.add(TPE2(encoding=3, text=META)) # Album Artist
+              audio.tags.add(TCOM(encoding=3, text=META)) # Composer
+              audio.tags.add(TCON(encoding=3, text=META)) # Genre
+              audio.tags.add(COMM(encoding=3, lang='eng', desc='', text=META)) # Comment
+
+              # 3. ID3V1 + ID3V2 দুইটাই save হবে
+              audio.tags.save(fpath, v1=2, v2_version=3)
+
+              print(f"Done -> {fname} | Format: audio/mpeg | ID3V1+ID3V2=Rizwan | Lyrics=Cleared")
+
+          PY
+
+      - name: Commit & Push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add rizwanaudio/
+          if git diff --staged --quiet; then
+            echo "No changes"
+          else
+            git commit -m "fix: MP3 ID3V1+ID3V2 set to Rizwan, LyricsTag cleared for ${{ inputs.file_prefix }}*"
+            git push
+          fi
