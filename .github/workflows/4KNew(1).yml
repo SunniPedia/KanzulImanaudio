@@ -1,0 +1,163 @@
+name: 4K Video RizwanNew++
+on:
+  workflow_dispatch:
+    inputs:
+      surah_number:
+        description: 'কোন সুরার ভিডিও বানাবে? (যেমন: 001, 002)'
+        required: true
+        default: '001'
+        type: string
+      image_folder:
+        description: 'Image folder'
+        required: false
+        default: 'img'
+        type: string
+      audio_folder:
+        description: 'Audio folder'
+        required: false
+        default: 'rizwanaudio'
+        type: string
+
+jobs:
+  make-video:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install FFmpeg and Pillow
+        run: |
+          sudo apt-get update && sudo apt-get install -y ffmpeg
+          pip install Pillow
+
+      - name: Make Ayat Videos and Merge to One Surah Video - 4K (3840x2160 fixed)
+        run: |
+          IMG_DIR="${{ inputs.image_folder }}"
+          AUDIO_DIR="${{ inputs.audio_folder }}"
+          SURAH="${{ inputs.surah_number }}"
+          TEMP_IMG_DIR="temp_${SURAH}_images_fixed"
+          TEMP_VIDEO_DIR="temp_${SURAH}_videos"
+          FINAL_DIR="rizwanSurahVideo"
+          TARGET_W=3840
+          TARGET_H=2160
+
+          mkdir -p "$TEMP_IMG_DIR"
+          mkdir -p "$TEMP_VIDEO_DIR"
+          mkdir -p "$FINAL_DIR"
+
+          python3 << PY
+          from PIL import Image
+          import os, glob
+
+          IMG_DIR = os.environ.get("IMG_DIR", "${{ inputs.image_folder }}")
+          SURAH = os.environ.get("SURAH", "${{ inputs.surah_number }}")
+          TEMP_IMG_DIR = os.environ.get("TEMP_IMG_DIR", f"temp_{SURAH}_images_fixed")
+          TARGET_W = int(os.environ.get("TARGET_W", "3840"))
+          TARGET_H = int(os.environ.get("TARGET_H", "2160"))
+
+          def make_canvas_fixed(img_path, out_path):
+              img = Image.open(img_path).convert("RGB")
+              name = os.path.basename(img_path)
+              W_orig, H_orig = img.size
+
+              # 1. আগে width 3840 করা (আগের মতোই)
+              if W_orig != TARGET_W:
+                  new_h = round(H_orig * TARGET_W / W_orig)
+                  img = img.resize((TARGET_W, new_h), Image.LANCZOS)
+                  print(f"[INFO] {name} width {W_orig} -> {TARGET_W}, height {H_orig}->{new_h}")
+
+              W, H = img.size
+
+              if H < TARGET_H:
+                  # ছোট ছবি: নিচের 10px স্ট্রিপ টেনে নিচে বাড়ানো (সাইডবার ও লাইন শেষ পর্যন্ত চলে)
+                  canvas = Image.new("RGB", (TARGET_W, TARGET_H), (232,236,244))
+                  canvas.paste(img, (0, 0))
+                  strip = img.crop((0, H-10, TARGET_W, H))
+                  canvas.paste(strip.resize((TARGET_W, TARGET_H - H), Image.LANCZOS), (0, H))
+                  print(f"[INFO] Extended height {H} -> {TARGET_H} for {name}")
+
+              elif H > TARGET_H:
+                  # লম্বা ছবি: ২১৬০ উচ্চতায় ছোট করা (কিছুই কাটা হয় না),
+                  # ডান পাশের ফাঁকা অংশ ডান প্রান্তের 10px স্ট্রিপ টেনে ভরাট
+                  new_w = round(TARGET_W * TARGET_H / H)
+                  if new_w % 2 != 0:
+                      new_w += 1
+                  small = img.resize((new_w, TARGET_H), Image.LANCZOS)
+                  canvas = Image.new("RGB", (TARGET_W, TARGET_H), (232,236,244))
+                  canvas.paste(small, (0, 0))
+                  strip = small.crop((new_w-10, 0, new_w, TARGET_H))
+                  canvas.paste(strip.resize((TARGET_W - new_w, TARGET_H), Image.LANCZOS), (new_w, 0))
+                  print(f"[INFO] Scaled down {name}: {W}x{H} -> {new_w}x{TARGET_H}, right fill {TARGET_W-new_w}px")
+
+              else:
+                  canvas = img
+                  print(f"[INFO] Kept {W}x{H} for {name}")
+
+              canvas.save(out_path, "JPEG", quality=95, subsampling=0)
+
+          pattern = os.path.join(IMG_DIR, f"{SURAH}*.jpg")
+          for p in sorted(glob.glob(pattern)):
+              out = os.path.join(TEMP_IMG_DIR, os.path.basename(p))
+              make_canvas_fixed(p, out)
+          PY
+
+          # Image + Audio -> Video (সব ছবি এখন 3840x2160, তাই overlay/background লাগে না)
+          for img_file in "$TEMP_IMG_DIR"/${SURAH}*.jpg; do
+            [ -e "$img_file" ] || continue
+            file_name=$(basename "$img_file")
+            base="${file_name%.*}"
+            audio_file="$AUDIO_DIR/$base.mp3"
+
+            if [ ! -f "$audio_file" ]; then
+              echo "Audio missing: $audio_file - Skipping"
+              continue
+            fi
+
+            echo "Processing: $file_name -> $base.mp4"
+
+            ffmpeg -y -hide_banner -loglevel error \
+              -loop 1 -framerate 30 -i "$img_file" \
+              -i "$audio_file" \
+              -vf "format=yuv420p" -r 30 \
+              -c:v libx264 -tune stillimage -preset medium -crf 18 \
+              -c:a aac -b:a 192k \
+              -shortest \
+              "$TEMP_VIDEO_DIR/$base.mp4"
+          done
+
+          if ! ls "$TEMP_VIDEO_DIR"/${SURAH}*.mp4 1> /dev/null 2>&1; then
+            echo "No videos found to merge for Surah $SURAH"
+            exit 1
+          fi
+
+          ls -1 "$TEMP_VIDEO_DIR"/${SURAH}*.mp4 | sort -V > video_list_raw.txt
+
+          # Concat demuxer দিয়ে হালকা merge (সব ভিডিও 3840x2160, re-encode লাগে না)
+          : > concat_list.txt
+          while read f; do
+            printf "file '%s'\n" "$(readlink -f "$f")" >> concat_list.txt
+          done < video_list_raw.txt
+
+          ffmpeg -y -hide_banner -loglevel error \
+            -f concat -safe 0 -i concat_list.txt \
+            -c copy \
+            "$FINAL_DIR/${SURAH}.mp4"
+
+          ls -lh "$FINAL_DIR"/
+          rm -rf "$TEMP_VIDEO_DIR" "$TEMP_IMG_DIR" video_list_raw.txt concat_list.txt
+
+      - name: Upload Final Video
+        uses: actions/upload-artifact@v4
+        with:
+          name: Surah-${{ inputs.surah_number }}-4K-Video
+          path: rizwanSurahVideo/
+
+      - name: Commit Video to Repo
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add -f rizwanSurahVideo/
+          git commit -m "Added Surah ${{ inputs.surah_number }} 4K Video - Fixed 3840x2160" || echo "No changes"
+          git push || echo "Push failed - file >100MB, use Artifact"
