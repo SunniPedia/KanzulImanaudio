@@ -1,0 +1,813 @@
+name: Generate Ayah Images + 4K Video Rizwan
+
+on:
+  workflow_dispatch:
+    inputs:
+      surah_number:
+        description: 'কোন সুরার ভিডিও বানাবে? (যেমন: 001, 002)'
+        required: true
+        default: '001'
+        type: string
+      arabic_name:
+        description: 'আরবি সূরার নাম (উপরে থাকবে)'
+        required: true
+        type: string
+      bangla_name:
+        description: 'বাংলা সূরার নাম (নিচে থাকবে)'
+        required: true
+        type: string
+      image_folder:
+        description: 'Image folder (ধাপ ১ এ তৈরি ছবি এখানে যায়, ধাপ ২ এখান থেকে পড়ে)'
+        required: false
+        default: 'output'
+        type: string
+      audio_folder:
+        description: 'Audio folder'
+        required: false
+        default: 'rizwanaudio'
+        type: string
+      typing_speed:
+        description: 'বাংলা অনুবাদ টাইপরাইটারের গতি (প্রতি সেকেন্ডে কয়টি অক্ষর, যেমন: 18)'
+        required: false
+        default: '18'
+        type: string
+      transition_seconds:
+        description: 'আয়াত বদলের এনিমেশনের সময় (সেকেন্ডে, যেমন: 0.5। 0 দিলে এনিমেশন বন্ধ)'
+        required: false
+        default: '0.5'
+        type: string
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install FFmpeg and Pillow
+        run: |
+          sudo apt-get update && sudo apt-get install -y ffmpeg
+          pip install Pillow
+
+      - name: Step 1 - Generate Fixed Images (3840x2160) + Animation Layers
+        env:
+          ARABIC_NAME: ${{ inputs.arabic_name }}
+          BANGLA_NAME: ${{ inputs.bangla_name }}
+          IMAGE_FOLDER: ${{ inputs.image_folder }}
+          SURAH_NUMBER: ${{ inputs.surah_number }}
+        run: |
+          python3 << 'PY'
+          from PIL import Image, ImageDraw, ImageFont
+          import json, os, re, shutil, unicodedata
+
+          BG="src/background.jpg"
+          LOGO="src/logo.jpg"
+          DATA="src/data.json"
+          OUT=os.environ.get("IMAGE_FOLDER","output")
+          FONT_BN="src/solaimanlipi.ttf"
+          FONT_AR="src/noorehuda.ttf"
+
+          # ---- এনিমেশনের জন্য আলাদা লেয়ার এখানে জমা হয় (শুধু ভিডিওর জন্য, রিপোতে push হয় না) ----
+          ANIM="anim_layers"
+          SURAH_PREFIX=os.environ.get("SURAH_NUMBER","").strip()
+
+          def normalize_arabic_display(text):
+              return text.replace('\u0671', '\u0627')
+
+          AR_NAME=normalize_arabic_display(os.environ.get("ARABIC_NAME","").strip())
+          BN_NAME=os.environ.get("BANGLA_NAME","").strip()
+
+          if os.path.exists(OUT):
+              shutil.rmtree(OUT)
+          os.makedirs(OUT, exist_ok=True)
+
+          if os.path.exists(ANIM):
+              shutil.rmtree(ANIM)
+          os.makedirs(ANIM, exist_ok=True)
+
+          EN_TO_BN=str.maketrans("0123456789","০১২৩৪৫৬৭৮৯")
+          def to_bangla_num(s): return str(s).translate(EN_TO_BN)
+          def extract_number(s):
+              s=str(s).translate(str.maketrans("০১২৩৪৫৬৭৮৯","0123456789"))
+              m=re.search(r'\d+',s)
+              return int(m.group()) if m else 0
+          def clean_name(text):
+              text = re.sub(r'\s*\(\s*[0-9০-৯]+\s*\)', '', text)
+              return re.sub(r'\s{2,}', ' ', text).strip()
+
+          def has_arabic_letter(word):
+              # আয়াত-শেষের গোল নম্বর চিহ্ন (۝ + অঙ্ক, কখনো তার আগে waqf mark যেমন 'لا')
+              # এ কোনো মূল অক্ষর (letter) থাকে না — শুধু combining mark/digit/symbol থাকে।
+              # এই ফাংশন দিয়ে সেটা শনাক্ত করে আলাদা করা হয়।
+              return any(unicodedata.category(ch).startswith('L') for ch in word)
+
+          def merge_marker_tokens(words):
+              # স্পেস দিয়ে ভাঙা শব্দগুলোর মধ্যে যেগুলোতে কোনো আসল অক্ষর নেই (যেমন আয়াত নম্বরের
+              # গোল চিহ্ন/waqf mark), সেগুলো সবসময় আগের আসল শব্দের সাথে জোড়া লাগিয়ে দেওয়া হয়।
+              # ফলে wrap হওয়ার সময় এই চিহ্নটা কখনোই একা নতুন লাইনে পড়বে না (একা পড়লেই এর
+              # glyph shaping ভেঙে যায়/box আকারে দেখায়) — বরং শেষ শব্দের সাথেই এক টুকরো হয়ে
+              # যেকোনো লাইনে যাবে, ফলে শেপিং সবসময় ঠিক থাকবে।
+              merged=[]
+              for w in words:
+                  if merged and not has_arabic_letter(w):
+                      merged[-1] = merged[-1] + w
+                  else:
+                      merged.append(w)
+              return merged
+
+          # ---- Background: TARGET_W 3840 fixed ----
+          TARGET_W = 3840
+          if os.path.exists(BG):
+              _bg_raw = Image.open(BG).convert("RGB")
+          else:
+              _bg_raw = Image.new("RGB", (TARGET_W, 2160), (232,236,244))
+
+          if _bg_raw.width!= TARGET_W:
+              _resize_ratio = TARGET_W / _bg_raw.width
+              _new_h = round(_bg_raw.height * _resize_ratio)
+              orig_bg = _bg_raw.resize((TARGET_W, _new_h), Image.LANCZOS)
+              print(f"[INFO] background.jpg width {_bg_raw.width} → {TARGET_W} e normalize")
+          else:
+              orig_bg = _bg_raw
+
+          W = TARGET_W
+          BASE_W, BASE_H = orig_bg.size
+
+          def make_canvas(target_h):
+              if target_h <= BASE_H:
+                  return orig_bg.crop((0, 0, W, target_h))
+              canvas = Image.new("RGB", (W, target_h), (232,236,244))
+              canvas.paste(orig_bg, (0,0))
+              strip = orig_bg.crop((0, BASE_H-10, W, BASE_H))
+              canvas.paste(strip.resize((W, target_h - BASE_H), Image.LANCZOS), (0, BASE_H))
+              return canvas
+
+          LEFT_W=int(W*0.22)
+          SCALE=W/1280
+
+          def get_font_by_size(is_ar, px_size):
+              p=FONT_AR if is_ar else FONT_BN
+              try: return ImageFont.truetype(p, int(px_size))
+              except: return ImageFont.load_default()
+          def get_font(is_ar, dp):
+              return get_font_by_size(is_ar, dp*SCALE)
+
+          with open(DATA, encoding="utf-8") as f:
+              data=json.load(f)
+
+          BASE_SURA=40
+          BASE_KANZUL=42
+          BASE_BN=52
+          BASE_AR=80
+
+          SURA_Y=int(300*SCALE)
+          AYAT_Y=SURA_Y + int(BASE_SURA*SCALE*1.6)
+          LINE_Y=AYAT_Y + int(BASE_SURA*SCALE*1.6)
+          LINE_Y_NO_AYAT=SURA_Y + int(BASE_SURA*SCALE*1.6)
+          BOTTOM_MARGIN = int(5 * SCALE)
+          TOP_MARGIN = int(120*SCALE)
+
+          # ---- ফিক্সড 16:9 ফ্রেম: সব ছবি 3840x2160 ----
+          CANVAS_H = 2160
+          FIT_TOP = int(50*SCALE)       # লেখার ব্লকের উপরের ন্যূনতম ফাঁকা
+          FIT_BOTTOM = int(40*SCALE)    # নিচের ন্যূনতম ফাঁকা
+          MIN_K = 0.5                   # ফন্ট সর্বোচ্চ কতটা ছোট হতে পারবে (৫০%)
+
+          # ---- আলাদা আলাদা shrink logic ----
+          SIDE_MARGIN=int(30*SCALE)
+          AVAIL_W_NAMES = LEFT_W - 2*SIDE_MARGIN
+          DETAILS_FLOOR=32
+          GAP_Y_DETAILS=int(22*SCALE)
+          _dummy_draw=ImageDraw.Draw(Image.new("RGB",(10,10)))
+
+          # আরবি নামের জন্য আলাদা
+          temp_AR = 72
+          BASE_DETAILS_AR = 68
+          while True:
+              f_ar_det=get_font_by_size(True, temp_AR*SCALE)
+              AR_NAME_W=_dummy_draw.textlength(AR_NAME, font=f_ar_det)
+              if AR_NAME_W <= AVAIL_W_NAMES or temp_AR <= DETAILS_FLOOR:
+                  BASE_DETAILS_AR=temp_AR
+                  break
+              temp_AR -= 2
+
+          # বাংলা নামের জন্য আলাদা
+          temp_BN = 72
+          BASE_DETAILS_BN = 68
+          while True:
+              f_bn_det=get_font_by_size(False, temp_BN*SCALE)
+              BN_NAME_W=_dummy_draw.textlength(BN_NAME, font=f_bn_det)
+              if BN_NAME_W <= AVAIL_W_NAMES or temp_BN <= DETAILS_FLOOR:
+                  BASE_DETAILS_BN=temp_BN
+                  break
+              temp_BN -= 2
+
+          print(f"Details font -> AR: {BASE_DETAILS_AR} (for {AR_NAME}), BN: {BASE_DETAILS_BN} (for {BN_NAME})")
+
+          def disp(n):
+              if n == 0: return "0"
+              return f"0{n}" if n < 10 else str(n)
+
+          # colon glyph টা এই ফন্টে বেসলাইনের নিচের দিকে বসে, তাই একটু উপরে তুলে
+          # আলাদাভাবে আঁকা হয় যাতে এটা লেবেল/ভ্যালুর সাথে উলম্বভাবে মাঝ বরাবর দেখায়
+          COLON_LIFT_RATIO = 0.16
+
+          def _piece_widths(draw, label, colon_str, value, font):
+              label_w = draw.textlength(label, font=font)
+              colon_w = draw.textlength(colon_str, font=font)
+              value_w = draw.textlength(value, font=font) if value else 0
+              return label_w, colon_w, value_w
+
+          def draw_label_with_centered_colon(draw, x, y, label, value, font, fill, attach_colon=False):
+              """
+              attach_colon=False -> 'লেবেল : মান'  (স্পেস সহ, সূরা/আয়াত এর জন্য)
+              attach_colon=True  -> 'লেবেল: মান'   (লেবেলের সাথে লাগানো, অনুবাদ লেবেলের জন্য)
+              কোলনটা font size অনুযায়ী উপরে তুলে আঁকা হয়, যাতে মাঝ বরাবর দেখায়।
+              """
+              colon_str = ": " if (attach_colon and value) else (":" if attach_colon else " : " if value else " :")
+              label_w, colon_w, value_w = _piece_widths(draw, label, colon_str, value, font)
+              total_w = label_w + colon_w + value_w
+
+              lift = int(font.size * COLON_LIFT_RATIO)
+
+              draw.text((x, y), label, font=font, fill=fill)
+              draw.text((x + label_w, y - lift), colon_str, font=font, fill=fill)
+              if value:
+                  draw.text((x + label_w + colon_w, y), value, font=font, fill=fill)
+
+              return total_w
+
+          def draw_centered_label_colon(draw, y, label, value, font, fill):
+              colon_str = " : " if value else " :"
+              label_w, colon_w, value_w = _piece_widths(draw, label, colon_str, value, font)
+              total_w = label_w + colon_w + value_w
+              start_x = (LEFT_W - total_w)//2
+              draw_label_with_centered_colon(draw, start_x, y, label, value, font, fill, attach_colon=False)
+
+          def draw_label_colon(draw, x, y, label, value, font, fill):
+              # অনুবাদ লেবেলের কোলন সরাসরি লেবেলের সাথে লাগানো + মাঝ বরাবর তোলা
+              draw_label_with_centered_colon(draw, x, y, label, value, font, fill, attach_colon=True)
+
+          for item in data:
+              sura_int=extract_number(item.get('sura','0'))
+              ayat_int=extract_number(item.get('verses','0'))
+              filename=f"{sura_int:03d}{ayat_int:03d}.jpg"
+              stem=filename[:-4]
+              # যে সূরার ভিডিও বানানো হবে শুধু তার আয়াতগুলোর জন্য এনিমেশন লেয়ার তৈরি হয়
+              animate = bool(SURAH_PREFIX) and filename.startswith(SURAH_PREFIX)
+              sura_disp=to_bangla_num(disp(sura_int))
+              ayat_disp=to_bangla_num(disp(ayat_int))
+              show_ayat = ayat_int!= 0
+              line_y = LINE_Y if show_ayat else LINE_Y_NO_AYAT
+              names_y = line_y + int(55*SCALE)
+
+              f_sura=get_font(False, BASE_SURA)
+              max_w=W-LEFT_W-int(140*SCALE)
+              _calc_draw = ImageDraw.Draw(Image.new("RGB",(10,10)))
+
+              arabic_raw=normalize_arabic_display(item.get('names','').strip())
+              _ar_words = merge_marker_tokens(arabic_raw.split())
+              cleaned=clean_name(item.get('name',''))
+              _bn_words = cleaned.split()
+
+              def wrap_words(words, font):
+                  lines=[]; cur=""
+                  for w in words:
+                      test=f"{cur} {w}".strip()
+                      if _calc_draw.textlength(test, font=font) <= max_w:
+                          cur=test
+                      else:
+                          if cur: lines.append(cur)
+                          cur=w
+                  if cur: lines.append(cur)
+                  return lines
+
+              # লম্বা আয়াতে ফন্ট একটু একটু ছোট করে (k) পুরো লেখা 2160 উচ্চতায় বসানো হয়।
+              # ছোট ফন্টে লাইনও কমে, তাই সাইডবার/ফ্রেম ছোট হয় না, শুধু ওই আয়াতের লেখা ছোট হয়।
+              avail_h = CANVAS_H - FIT_TOP - FIT_BOTTOM
+              k = 1.0
+              while True:
+                  f_ar = get_font(True, BASE_AR*k)
+                  f_bn = get_font(False, BASE_BN*k)
+                  f_kanzul = get_font(False, BASE_KANZUL*k)
+                  arabic_lines = wrap_words(_ar_words, f_ar)
+                  bn_lines = wrap_words(_bn_words, f_bn)
+                  AR_LH = int(BASE_AR*k*SCALE*1.5)
+                  BN_LH = int(BASE_BN*k*SCALE*1.4)
+                  GAP1 = int(50*SCALE*k)
+                  GAP2 = int(75*SCALE*k)
+                  total_block_h = len(arabic_lines)*AR_LH + GAP1 + GAP2 + len(bn_lines)*BN_LH
+                  if total_block_h <= avail_h or k <= MIN_K:
+                      break
+                  k = round(k - 0.02, 2)
+
+              # সাধারণত H = 2160; k ন্যূনতমে গিয়েও না ধরলে (অতি বিরল) ফ্রেম বাড়ে
+              H = max(CANVAS_H, total_block_h + FIT_TOP + FIT_BOTTOM)
+              if k < 1.0:
+                  print(f"[FIT] {filename}: font scale {k}, lines AR={len(arabic_lines)} BN={len(bn_lines)}")
+
+              bg = make_canvas(H)
+              draw=ImageDraw.Draw(bg)
+              draw.rectangle([0,0,LEFT_W,H], fill=(214,218,228))
+              draw.line([(LEFT_W,0),(LEFT_W,H)], fill=(35,45,85), width=int(4*SCALE))
+
+              if os.path.exists(LOGO):
+                  try:
+                      ls=int(200*SCALE)
+                      logo=Image.open(LOGO).convert("RGBA").resize((ls,ls), Image.LANCZOS)
+                      bg.paste(logo,(int((LEFT_W-ls)//2), int(30*SCALE)), logo)
+                  except: pass
+
+              start_y = max(FIT_TOP, (H - total_block_h - BOTTOM_MARGIN)//2)
+
+              draw_centered_label_colon(draw, SURA_Y, "সূরা", sura_disp, f_sura, (0,0,0))
+              if show_ayat:
+                  draw_centered_label_colon(draw, AYAT_Y, "আয়াত", ayat_disp, f_sura, (0,0,0))
+              draw.line([(int(40*SCALE), line_y), (int(LEFT_W-40*SCALE), line_y)], fill=(100,100,120), width=2)
+
+              f_ar_det=get_font_by_size(True, BASE_DETAILS_AR*SCALE)
+              f_bn_det=get_font_by_size(False, BASE_DETAILS_BN*SCALE)
+              ar_w = draw.textlength(AR_NAME, font=f_ar_det)
+              bn_w = draw.textlength(BN_NAME, font=f_bn_det)
+              draw.text(((LEFT_W - ar_w)//2, names_y), AR_NAME, font=f_ar_det, fill=(20,20,60))
+              draw.text(((LEFT_W - bn_w)//2, names_y + int(BASE_DETAILS_AR*SCALE*1.6) + GAP_Y_DETAILS), BN_NAME, font=f_bn_det, fill=(20,20,60))
+
+              # ---- এনিমেশন লেয়ার ১: সাইডবার + ব্যাকগ্রাউন্ড (স্থির অংশ) ----
+              # এই পর্যন্ত আঁকা ছবিতে শুধু ব্যাকগ্রাউন্ড + সাইডবার আছে; আরবি আয়াত ও অনুবাদ এখনো আঁকা হয়নি।
+              # H != 2160 হলে (অতি বিরল) এনিমেশন বাদ, ধাপ ২ তখন আগের মতো স্থির ছবি ব্যবহার করবে।
+              do_anim = animate and H == CANVAS_H
+              PANE_X = LEFT_W
+              if do_anim:
+                  bg.save(os.path.join(ANIM, f"{stem}_base.jpg"), "JPEG", quality=95, subsampling=0)
+                  # আরবি আয়াত ও "কানযুল ঈমান" লেবেলের জন্য স্বচ্ছ (RGBA) লেয়ার।
+                  # লেয়ার আগে থেকেই লেখার রঙে ভরা (alpha=0), যাতে অ্যান্টি-অ্যালিয়াসিং এর কিনারা সুন্দর থাকে।
+                  lay_ar = Image.new("RGBA", (W-PANE_X, H), (0,0,0,0))
+                  lay_kz = Image.new("RGBA", (W-PANE_X, H), (20,40,120,0))
+                  d_ar = ImageDraw.Draw(lay_ar)
+                  d_kz = ImageDraw.Draw(lay_kz)
+
+              y=start_y
+              for line in arabic_lines:
+                  w=draw.textlength(line, font=f_ar)
+                  ax=W-int(70*SCALE)-w
+                  draw.text((ax, y), line, font=f_ar, fill=(0,0,0))
+                  if do_anim:
+                      d_ar.text((ax-PANE_X, y), line, font=f_ar, fill=(0,0,0,255))
+                  y+=AR_LH
+
+              y+=GAP1
+              KZ_X=LEFT_W+int(50*SCALE)
+              draw_label_colon(draw, KZ_X, y, "কানযুল ঈমান থেকে অনুবাদ", "", f_kanzul, (20,40,120))
+              if do_anim:
+                  draw_label_colon(d_kz, KZ_X-PANE_X, y, "কানযুল ঈমান থেকে অনুবাদ", "", f_kanzul, (20,40,120,255))
+              y+=GAP2
+
+              # ---- এনিমেশন লেয়ার ২: আরবি + লেবেল PNG হিসেবে সেভ (শুধু যতটুকু জায়গা লাগে ততটুকু) ----
+              ar_xy=[PANE_X, 0]
+              if do_anim:
+                  lay = Image.alpha_composite(lay_ar, lay_kz)
+                  bb = lay.getchannel("A").getbbox()
+                  if bb:
+                      pad = 6
+                      bb = (max(0,bb[0]-pad), max(0,bb[1]-pad), min(lay.width,bb[2]+pad), min(lay.height,bb[3]+pad))
+                      # ওভারলের শুরুর x/y জোড় সংখ্যা রাখা হয়, নইলে YUV 4:2:0 তে রঙের প্রান্ত ১ পিক্সেল সরে যায়
+                      bb = (bb[0] - (bb[0] % 2), bb[1] - (bb[1] % 2), bb[2], bb[3])
+                  else:
+                      bb = (0, 0, 2, 2)
+                  lay.crop(bb).save(os.path.join(ANIM, f"{stem}_ar.png"), compress_level=3)
+                  ar_xy=[bb[0]+PANE_X, bb[1]]
+                  del lay_ar, lay_kz, lay
+
+              # ---- বাংলা অনুবাদ: ছবিতে আঁকা + টাইপরাইটারের জন্য প্রতিটি শব্দের অবস্থান রেকর্ড ----
+              bn_y0 = y
+              bn_json_lines=[]
+              for i,line in enumerate(bn_lines):
+                  words=line.split()
+                  is_last=i==len(bn_lines)-1
+                  segs=None
+                  if not is_last and len(words)>1:
+                      base_w=sum(draw.textlength(w, font=f_bn) for w in words) + draw.textlength(" ", font=f_bn)*(len(words)-1)
+                      extra=max_w-base_w
+                      gap=extra/(len(words)-1) if len(words)>1 else 0
+                      if 0 < gap < 70*SCALE:
+                          tx=LEFT_W+int(50*SCALE)
+                          segs=[]
+                          for w in words:
+                              draw.text((tx,y), w, font=f_bn, fill=(15,25,85))
+                              segs.append({"text": w, "x": tx})
+                              tx+=draw.textlength(w, font=f_bn)+draw.textlength(" ", font=f_bn)+gap
+                      else:
+                          draw.text((LEFT_W+int(50*SCALE), y), line, font=f_bn, fill=(15,25,85))
+                  else:
+                      draw.text((LEFT_W+int(50*SCALE), y), line, font=f_bn, fill=(15,25,85))
+                  if segs is None:
+                      segs=[{"text": line, "x": LEFT_W+int(50*SCALE)}]
+                  bn_json_lines.append({"y": y, "segs": segs})
+                  y+=BN_LH
+
+              bg.save(os.path.join(OUT, filename), "JPEG", quality=95, subsampling=0)
+
+              if do_anim:
+                  rx0 = LEFT_W + int(20*SCALE)
+                  rx1 = W - int(20*SCALE)
+                  ry0 = max(0, int(bn_y0 - 0.30*BN_LH))
+                  ry1 = min(H, int(y + 0.30*BN_LH))
+                  ry0 -= ry0 % 2          # জোড় সংখ্যা (YUV 4:2:0 এর সাথে মেলাতে)
+                  ry1 -= ry1 % 2
+                  rx0 -= rx0 % 2
+                  rx1 -= rx1 % 2
+                  meta = {
+                      "animated": True,
+                      "base": f"{stem}_base.jpg",
+                      "ar_png": f"{stem}_ar.png",
+                      "ar_xy": ar_xy,
+                      "bn": {
+                          "font": FONT_BN,
+                          "font_px": int(BASE_BN*k*SCALE),
+                          "color": [15,25,85],
+                          "region": [rx0, ry0, rx1, ry1],
+                          "lines": bn_json_lines,
+                      },
+                  }
+                  with open(os.path.join(ANIM, f"{stem}.json"), "w", encoding="utf-8") as jf:
+                      json.dump(meta, jf, ensure_ascii=False)
+
+              print(f"Done {filename} | W={W} H={H} | AR font {BASE_DETAILS_AR} BN font {BASE_DETAILS_BN}" + (" | anim layers saved" if do_anim else ""))
+
+          PY
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ayah-images
+          path: ${{ inputs.image_folder }}/
+          retention-days: 7
+
+      - name: Push output
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -f "${{ inputs.image_folder }}/"
+          git commit -m "fix: all ayah images fixed 3840x2160, long ayah fonts auto-shrink to fit" || echo "no changes"
+          git push
+
+      - name: Step 2 - Make Animated Ayat Videos (Typewriter + Transitions) and Merge to One Surah Video - 4K (3840x2160 fixed)
+        env:
+          IMG_DIR: ${{ inputs.image_folder }}
+          AUDIO_DIR: ${{ inputs.audio_folder }}
+          SURAH: ${{ inputs.surah_number }}
+          TYPING_SPEED: ${{ inputs.typing_speed }}
+          TRANSITION_SECONDS: ${{ inputs.transition_seconds }}
+        run: |
+          TEMP_IMG_DIR="temp_${SURAH}_images_fixed"
+          TEMP_VIDEO_DIR="temp_${SURAH}_videos"
+          FINAL_DIR="rizwanSurahVideo"
+          TARGET_W=3840
+          TARGET_H=2160
+          export TEMP_IMG_DIR TEMP_VIDEO_DIR TARGET_W TARGET_H
+
+          mkdir -p "$TEMP_IMG_DIR"
+          mkdir -p "$TEMP_VIDEO_DIR"
+          mkdir -p "$FINAL_DIR"
+
+          python3 << 'PY'
+          from PIL import Image, ImageDraw, ImageFont
+          import os, glob, json, math, subprocess, unicodedata
+
+          IMG_DIR        = os.environ["IMG_DIR"]
+          AUDIO_DIR      = os.environ["AUDIO_DIR"]
+          SURAH          = os.environ["SURAH"]
+          TEMP_IMG_DIR   = os.environ["TEMP_IMG_DIR"]
+          TEMP_VIDEO_DIR = os.environ["TEMP_VIDEO_DIR"]
+          TARGET_W       = int(os.environ.get("TARGET_W", "3840"))
+          TARGET_H       = int(os.environ.get("TARGET_H", "2160"))
+          ANIM_DIR       = "anim_layers"
+          FPS            = 30
+
+          def _num(name, default, lo, hi):
+              try:
+                  v = float(str(os.environ.get(name, "")).strip())
+              except Exception:
+                  v = default
+              return max(lo, min(hi, v))
+
+          TYPING_CPS  = _num("TYPING_SPEED", 18.0, 3.0, 200.0)       # প্রতি সেকেন্ডে অক্ষর
+          TRANS       = _num("TRANSITION_SECONDS", 0.5, 0.0, 2.0)    # আয়াত বদলের ফেড/স্লাইডের সময়
+          TYPE_DELAY  = 0.30     # আয়াত শুরুর কতক্ষণ পর টাইপ শুরু হবে (সেকেন্ড)
+          MIN_HOLD    = 0.8      # টাইপ শেষে পুরো অনুবাদ কমপক্ষে এতক্ষণ স্থির থাকবে
+          SLIDE_PX    = int(40 * TARGET_W / 1280)   # নতুন আয়াতের লেখা ডান দিক থেকে এতটুকু স্লাইড করে আসবে
+          SHOW_CURSOR = True     # টাইপ করার সময় শেষ অক্ষরের পাশে কার্সর
+
+          # ------------------------------------------------------------------
+          # স্থির ছবি ঠিক 3840x2160 বানানোর ফাংশন (ফলব্যাক হিসেবে আগের মতোই কাজ করে)
+          # ------------------------------------------------------------------
+          def make_canvas_fixed(img_path, out_path):
+              img = Image.open(img_path).convert("RGB")
+              name = os.path.basename(img_path)
+              W_orig, H_orig = img.size
+
+              # 1. আগে width 3840 করা (আগের মতোই)
+              if W_orig != TARGET_W:
+                  new_h = round(H_orig * TARGET_W / W_orig)
+                  img = img.resize((TARGET_W, new_h), Image.LANCZOS)
+                  print(f"[INFO] {name} width {W_orig} -> {TARGET_W}, height {H_orig}->{new_h}")
+
+              W, H = img.size
+
+              if H < TARGET_H:
+                  # ছোট ছবি: নিচের 10px স্ট্রিপ টেনে নিচে বাড়ানো (সাইডবার ও লাইন শেষ পর্যন্ত চলে)
+                  canvas = Image.new("RGB", (TARGET_W, TARGET_H), (232,236,244))
+                  canvas.paste(img, (0, 0))
+                  strip = img.crop((0, H-10, TARGET_W, H))
+                  canvas.paste(strip.resize((TARGET_W, TARGET_H - H), Image.LANCZOS), (0, H))
+                  print(f"[INFO] Extended height {H} -> {TARGET_H} for {name}")
+
+              elif H > TARGET_H:
+                  # লম্বা ছবি: ২১৬০ উচ্চতায় ছোট করা (কিছুই কাটা হয় না),
+                  # ডান পাশের ফাঁকা অংশ ডান প্রান্তের 10px স্ট্রিপ টেনে ভরাট
+                  new_w = round(TARGET_W * TARGET_H / H)
+                  if new_w % 2 != 0:
+                      new_w += 1
+                  small = img.resize((new_w, TARGET_H), Image.LANCZOS)
+                  canvas = Image.new("RGB", (TARGET_W, TARGET_H), (232,236,244))
+                  canvas.paste(small, (0, 0))
+                  strip = small.crop((new_w-10, 0, new_w, TARGET_H))
+                  canvas.paste(strip.resize((TARGET_W - new_w, TARGET_H), Image.LANCZOS), (new_w, 0))
+                  print(f"[INFO] Scaled down {name}: {W}x{H} -> {new_w}x{TARGET_H}, right fill {TARGET_W-new_w}px")
+
+              else:
+                  canvas = img
+                  print(f"[INFO] Kept {W}x{H} for {name}")
+
+              canvas.save(out_path, "JPEG", quality=95, subsampling=0)
+
+          # ------------------------------------------------------------------
+          # ফলব্যাক: এনিমেশন ছাড়া স্থির ছবি + অডিও -> ভিডিও (আগের কমান্ডই)
+          # ------------------------------------------------------------------
+          def make_static_clip(img_file, audio_file, out_file):
+              cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                     "-loop", "1", "-framerate", str(FPS), "-i", img_file,
+                     "-i", audio_file,
+                     "-vf", "format=yuv420p", "-r", str(FPS),
+                     "-c:v", "libx264", "-tune", "stillimage", "-preset", "medium", "-crf", "18",
+                     "-c:a", "aac", "-b:a", "192k",
+                     "-shortest", out_file]
+              r = subprocess.run(cmd)
+              return r.returncode == 0
+
+          def audio_duration(path):
+              r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                                  "-of", "default=nw=1:nk=1", path],
+                                 capture_output=True, text=True)
+              try:
+                  return float(r.stdout.strip())
+              except Exception:
+                  return 0.0
+
+          # ------------------------------------------------------------------
+          # বাংলা টেক্সটকে "অক্ষর-গুচ্ছ" (cluster) এ ভাঙা: যুক্তাক্ষর, কার-চিহ্ন, হসন্ত আলাদা হয়ে যায় না
+          # ------------------------------------------------------------------
+          def split_clusters(text):
+              out = []
+              for ch in text:
+                  join = False
+                  if out:
+                      cat = unicodedata.category(ch)
+                      if ch.isspace():
+                          join = True                      # স্পেস আগের অক্ষরের সাথে লাগে (আলাদা ধাপ লাগে না)
+                      elif cat in ("Mn", "Mc", "Me") or ch in ("\u200d", "\u200c"):
+                          join = True                      # কার/চন্দ্রবিন্দু/নুক্তা/ZWJ আগের অক্ষরের সাথে
+                      else:
+                          last = out[-1].rstrip("\u200d\u200c")
+                          if last and unicodedata.combining(last[-1]) == 9:
+                              join = True                  # হসন্তের পরের ব্যঞ্জন একই যুক্তাক্ষরের অংশ
+                  if join:
+                      out[-1] += ch
+                  else:
+                      out.append(ch)
+              return out
+
+          # ------------------------------------------------------------------
+          # টাইপরাইটার ফ্রেম রেন্ডারার: শুধু বাংলা অনুবাদের জায়গাটুকু (স্বচ্ছ RGBA) আঁকে
+          # ------------------------------------------------------------------
+          class TypeRenderer:
+              def __init__(self, bn):
+                  self.rx0, self.ry0, self.rx1, self.ry1 = [int(v) for v in bn["region"]]
+                  self.w = self.rx1 - self.rx0
+                  self.h = self.ry1 - self.ry0
+                  try:
+                      self.font = ImageFont.truetype(bn["font"], int(bn["font_px"]))
+                  except Exception:
+                      self.font = ImageFont.load_default()
+                  r, g, b = bn["color"]
+                  self.ink = (r, g, b, 255)
+                  self.clear = (r, g, b, 0)     # রঙ আগে থেকেই বসানো, alpha=0 => কিনারা ঠিক থাকে
+                  self.lines = []
+                  self.events = []              # প্রতিটি অক্ষর-গুচ্ছ = একটি টাইপিং ইভেন্ট
+                  for li, ln in enumerate(bn["lines"]):
+                      segs = []
+                      for si, sg in enumerate(ln["segs"]):
+                          cl = split_clusters(sg["text"])
+                          segs.append({"x": sg["x"] - self.rx0, "text": sg["text"], "clusters": cl})
+                          for ci in range(len(cl)):
+                              self.events.append((li, si, ci))
+                      self.lines.append({"y": ln["y"] - self.ry0, "segs": segs})
+                  self.n = len(self.events)
+                  self.acc = Image.new("RGBA", (self.w, self.h), self.clear)   # সম্পূর্ণ হয়ে যাওয়া লাইনগুলো
+                  self.acc_d = ImageDraw.Draw(self.acc)
+                  self.acc_upto = 0
+                  asc, desc = self.font.getmetrics()
+                  self.cur_top = int(asc * 0.12)
+                  self.cur_bot = asc + int(desc * 0.5)
+                  self.cur_w = max(3, int(self.font.size * 0.04))
+
+              def empty(self):
+                  return Image.new("RGBA", (self.w, self.h), self.clear)
+
+              def frame(self, e, cursor=True):
+                  # প্রথম e টি অক্ষর-গুচ্ছ পর্যন্ত লেখা দেখাও
+                  if e <= 0:
+                      return self.empty()
+                  li, si, ci = self.events[e-1]
+                  while self.acc_upto < li:
+                      ln0 = self.lines[self.acc_upto]
+                      for sg in ln0["segs"]:
+                          self.acc_d.text((sg["x"], ln0["y"]), sg["text"], font=self.font, fill=self.ink)
+                      self.acc_upto += 1
+                  img = self.acc.copy()
+                  d = ImageDraw.Draw(img)
+                  ln = self.lines[li]
+                  for sj in range(si):
+                      sg = ln["segs"][sj]
+                      d.text((sg["x"], ln["y"]), sg["text"], font=self.font, fill=self.ink)
+                  sg = ln["segs"][si]
+                  prefix = "".join(sg["clusters"][:ci+1])
+                  d.text((sg["x"], ln["y"]), prefix, font=self.font, fill=self.ink)
+                  if cursor and SHOW_CURSOR:
+                      cx = int(sg["x"] + d.textlength(prefix, font=self.font)) + 4
+                      d.rectangle([cx, ln["y"] + self.cur_top, cx + self.cur_w, ln["y"] + self.cur_bot], fill=self.ink)
+                  return img
+
+          # ------------------------------------------------------------------
+          # এনিমেটেড ক্লিপ: স্থির ব্যাকগ্রাউন্ড + আরবি (ফেড/স্লাইড ইন-আউট) + বাংলা টাইপরাইটার
+          # ------------------------------------------------------------------
+          def make_animated_clip(base, audio_file, out_file):
+              meta_path = os.path.join(ANIM_DIR, base + ".json")
+              if not os.path.isfile(meta_path):
+                  return False
+              with open(meta_path, encoding="utf-8") as f:
+                  meta = json.load(f)
+              if not meta.get("animated"):
+                  return False
+              base_jpg = os.path.join(ANIM_DIR, meta["base"])
+              ar_png   = os.path.join(ANIM_DIR, meta["ar_png"])
+              if not (os.path.isfile(base_jpg) and os.path.isfile(ar_png)):
+                  return False
+
+              dur = audio_duration(audio_file)
+              if dur < 1.5:
+                  print(f"[ANIM] {base}: audio too short/unknown ({dur}s) -> static fallback")
+                  return False
+
+              rend = TypeRenderer(meta["bn"])
+              ax, ay = [int(v) for v in meta["ar_xy"]]
+              bx, by = rend.rx0, rend.ry0
+
+              # ---- সময়ের হিসাব ----
+              tr = min(TRANS, dur / 4.0)
+              use_fx = tr >= 0.05
+              if not use_fx:
+                  tr = 0.0
+              D0 = int(round(TYPE_DELAY * FPS))                       # শুরুতে কয়টা ফাঁকা ফ্রেম
+              avail = dur - TYPE_DELAY - tr - MIN_HOLD                # টাইপ করার জন্য হাতে থাকা সময়
+              type_dur = max(0.4, min(rend.n / TYPING_CPS, avail)) if rend.n else 0.0
+              F_type = max(1, int(round(type_dur * FPS))) if rend.n else 0
+              max_frames = int(dur * FPS) - D0 - 2
+              if F_type > max_frames:
+                  F_type = max(1, max_frames)
+              S = min(rend.n, F_type) if rend.n else 0                # মোট টাইপিং ধাপ
+              bounds = [int(i * F_type / S + 0.5) for i in range(S + 1)] if S else [0]
+
+              # ---- ffmpeg ফিল্টার ----
+              fade_in  = f",fade=t=in:st=0:d={tr:.3f}:alpha=1" if use_fx else ""
+              fade_out = f",fade=t=out:st={dur - tr:.3f}:d={tr:.3f}:alpha=1" if use_fx else ""
+              slide    = f"+{SLIDE_PX}*pow(1-min(t/{tr:.3f},1),2)" if use_fx else ""
+              fg = (
+                  f"[0:v]format=yuv420p,loop=loop=-1:size=1:start=0,fps={FPS}[bg];"
+                  f"[1:v]format=yuva420p,loop=loop=-1:size=1:start=0,fps={FPS}{fade_in}{fade_out}[ar];"
+                  f"[2:v]format=yuva420p,tpad=stop=-1:stop_mode=clone{fade_in}{fade_out}[bn];"
+                  f"[bg][ar]overlay=x='{ax}{slide}':y={ay}[t1];"
+                  f"[t1][bn]overlay=x='{bx}{slide}':y={by},format=yuv420p[v]"
+              )
+              cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                     "-i", base_jpg,
+                     "-i", ar_png,
+                     "-f", "rawvideo", "-pix_fmt", "rgba", "-video_size", f"{rend.w}x{rend.h}",
+                     "-framerate", str(FPS), "-i", "pipe:0",
+                     "-i", audio_file,
+                     "-filter_complex", fg,
+                     "-map", "[v]", "-map", "3:a",
+                     "-r", str(FPS),
+                     "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p",
+                     "-c:a", "aac", "-b:a", "192k",
+                     "-t", f"{dur:.3f}", out_file]
+
+              log_path = out_file + ".log"
+              ok = False
+              with open(log_path, "wb") as logf:
+                  p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=logf, stderr=logf)
+                  try:
+                      def put(img, count):
+                          b = img.tobytes()
+                          for _ in range(count):
+                              p.stdin.write(b)
+
+                      put(rend.empty(), D0)                           # শুরুর ফাঁকা অংশ (ফেড-ইন চলছে)
+                      for i in range(S):
+                          e = min(rend.n, int(math.ceil((i + 1) * rend.n / S)))
+                          put(rend.frame(e, cursor=(i < S - 1)), bounds[i+1] - bounds[i])
+                      if S == 0:
+                          put(rend.empty(), 1)
+                      p.stdin.close()
+                  except (BrokenPipeError, OSError):
+                      pass
+                  p.wait()
+                  ok = (p.returncode == 0)
+
+              if not ok or not os.path.isfile(out_file) or os.path.getsize(out_file) == 0:
+                  try:
+                      with open(log_path, "rb") as lf:
+                          print(lf.read().decode("utf-8", "ignore")[-1500:])
+                  except Exception:
+                      pass
+                  if os.path.isfile(out_file):
+                      os.remove(out_file)
+                  return False
+              os.remove(log_path)
+              print(f"[ANIM] {base}: dur={dur:.2f}s clusters={rend.n} steps={S} typing={F_type/FPS:.2f}s")
+              return True
+
+          # ------------------------------------------------------------------
+          # মূল লুপ: প্রতিটি আয়াতের ছবি + অডিও -> ভিডিও
+          # ------------------------------------------------------------------
+          pattern = os.path.join(IMG_DIR, f"{SURAH}*.jpg")
+          for p_img in sorted(glob.glob(pattern)):
+              base = os.path.splitext(os.path.basename(p_img))[0]
+              audio_file = os.path.join(AUDIO_DIR, base + ".mp3")
+              if not os.path.isfile(audio_file):
+                  print(f"Audio missing: {audio_file} - Skipping")
+                  continue
+              out_file = os.path.join(TEMP_VIDEO_DIR, base + ".mp4")
+              print(f"Processing: {base}.jpg -> {base}.mp4")
+
+              done = False
+              try:
+                  done = make_animated_clip(base, audio_file, out_file)
+              except Exception as ex:
+                  print(f"[WARN] {base}: animation failed ({ex}) -> static fallback")
+                  done = False
+
+              if not done:
+                  fixed = os.path.join(TEMP_IMG_DIR, base + ".jpg")
+                  make_canvas_fixed(p_img, fixed)
+                  make_static_clip(fixed, audio_file, out_file)
+          PY
+
+          if ! ls "$TEMP_VIDEO_DIR"/${SURAH}*.mp4 1> /dev/null 2>&1; then
+            echo "No videos found to merge for Surah $SURAH"
+            exit 1
+          fi
+
+          ls -1 "$TEMP_VIDEO_DIR"/${SURAH}*.mp4 | sort -V > video_list_raw.txt
+
+          # Concat demuxer দিয়ে হালকা merge (সব ভিডিও 3840x2160, re-encode লাগে না)
+          : > concat_list.txt
+          while read f; do
+            printf "file '%s'\n" "$(readlink -f "$f")" >> concat_list.txt
+          done < video_list_raw.txt
+
+          ffmpeg -y -hide_banner -loglevel error \
+            -f concat -safe 0 -i concat_list.txt \
+            -c copy \
+            "$FINAL_DIR/${SURAH}.mp4"
+
+          ls -lh "$FINAL_DIR"/
+          rm -rf "$TEMP_VIDEO_DIR" "$TEMP_IMG_DIR" video_list_raw.txt concat_list.txt
+
+      - name: Upload Final Video
+        uses: actions/upload-artifact@v4
+        with:
+          name: Surah-${{ inputs.surah_number }}-4K-Video
+          path: rizwanSurahVideo/
+
+      - name: Commit Video to Repo
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add -f rizwanSurahVideo/
+          git commit -m "Added Surah ${{ inputs.surah_number }} 4K Video - Fixed 3840x2160" || echo "No changes"
+          git push || echo "Push failed - file >100MB, use Artifact"
