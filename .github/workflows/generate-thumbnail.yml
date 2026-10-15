@@ -48,7 +48,7 @@ jobs:
           SURAH_NO: ${{ inputs.surah_no }}
         run: |
           python - <<'PY'
-          import os, re, html, pathlib
+          import os, re, html, pathlib, base64, mimetypes
           from playwright.sync_api import sync_playwright
 
           ROOT = pathlib.Path.cwd()
@@ -117,7 +117,7 @@ jobs:
             <div class="divider"></div>
             <div class="right">
               <div>
-                <div class="medal"><img src="file://__SRC__/calligraphy.png"></div>
+                <div class="medal"><img id="calli" src="__CALLI__"></div>
                 <div class="quran-bn">আল কুরআন</div>
               </div>
               <div class="ornament"></div>
@@ -130,6 +130,16 @@ jobs:
             </div>
           </body></html>"""
 
+          # calligraphy ছবি খোঁজা: ছোট/বড় হাতের অক্ষর বা এক্সটেনশন (png/jpg/webp) যাই হোক, পাওয়া যাবে
+          print("src/ ফোল্ডারে আছে:", sorted(p.name for p in SRC.glob("*")) if SRC.exists() else "src ফোল্ডারই নেই!")
+          found = [p for p in SRC.glob("*") if p.stem.lower() == "calligraphy"] if SRC.exists() else []
+          if not found:
+              raise SystemExit("ERROR: src/ ফোল্ডারে calligraphy.png পাওয়া যায়নি। ফাইলটা রিপোতে commit+push করেছেন? নাম ঠিক calligraphy.png?")
+          cal = found[0]
+          mime = mimetypes.guess_type(cal.name)[0] or "image/png"
+          calli_uri = f"data:{mime};base64," + base64.b64encode(cal.read_bytes()).decode()
+          print("calligraphy ব্যবহার হচ্ছে:", cal.name, f"({cal.stat().st_size} bytes)")
+
           ar = os.environ["SURAH_AR"]
           bn = os.environ["SURAH_BN"]
           no_en = re.sub(r"\D", "", os.environ["SURAH_NO"].translate(TO_EN))   # ফাইলের নামের জন্য ইংরেজি সংখ্যা
@@ -138,6 +148,7 @@ jobs:
           no_bn = no_en.translate(TO_BN)                                         # থাম্বনেইলে বাংলা সংখ্যা
 
           page_html = (TEMPLATE
+              .replace("__CALLI__", calli_uri)
               .replace("__SRC__", SRC.as_posix())
               .replace("__AR__", html.escape(ar))
               .replace("__BN__", html.escape(bn))
@@ -155,6 +166,8 @@ jobs:
               pg.goto(tmp.as_uri())
               pg.evaluate("document.fonts.ready")
               pg.wait_for_timeout(800)
+              if not pg.evaluate("document.getElementById('calli').naturalWidth > 0"):
+                  raise SystemExit("ERROR: calligraphy ছবি লোড হয়নি — ফাইলটি নষ্ট বা ভুল ফরম্যাটের হতে পারে")
               pg.screenshot(path=str(out), type="png")
               b.close()
           tmp.unlink(missing_ok=True)
