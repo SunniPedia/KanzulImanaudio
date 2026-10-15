@@ -3,6 +3,10 @@ name: Generate Surah Thumbnail
 on:
   workflow_dispatch:
     inputs:
+      surah_no:
+        description: "সূরা নম্বর — যেমন: 1 (এই নম্বর দিয়েই ফাইলের নাম হবে)"
+        required: true
+        type: string
       surah_ar:
         description: "সূরার নাম (আরবি) — যেমন: سورة الفاتحة"
         required: true
@@ -10,11 +14,6 @@ on:
       surah_bn:
         description: "সূরার নাম (বাংলা) — যেমন: সূরা আল-ফাতিহা"
         required: true
-        type: string
-      surah_no:
-        description: "সূরা নম্বর (ঐচ্ছিক)"
-        required: false
-        default: ""
         type: string
       commit_result:
         description: "রিপোজটরিতে কমিট করবেন?"
@@ -42,13 +41,6 @@ jobs:
           pip install playwright
           playwright install --with-deps chromium
 
-      - name: Download calligraphy font (Aref Ruqaa, OFL)
-        run: |
-          mkdir -p src
-          [ -s src/ArefRuqaa-Bold.ttf ] || curl -fsSL -o src/ArefRuqaa-Bold.ttf \
-            https://raw.githubusercontent.com/google/fonts/main/ofl/arefruqaa/ArefRuqaa-Bold.ttf \
-            || echo "font download failed, fallback to noorehuda"
-
       - name: Generate thumbnail
         env:
           SURAH_AR: ${{ inputs.surah_ar }}
@@ -56,18 +48,18 @@ jobs:
           SURAH_NO: ${{ inputs.surah_no }}
         run: |
           python - <<'PY'
-          import os, html, pathlib
+          import os, re, html, pathlib
           from playwright.sync_api import sync_playwright
 
           ROOT = pathlib.Path.cwd()
           SRC = ROOT / "src"
-          BN = str.maketrans("0123456789", "০১২৩৪৫৬৭৮৯")
+          TO_BN = str.maketrans("0123456789", "০১২৩৪৫৬৭৮৯")
+          TO_EN = str.maketrans("০১২৩৪৫৬৭৮৯", "0123456789")
 
           TEMPLATE = """<!doctype html>
           <html lang="bn"><head><meta charset="utf-8">
           <style>
           @font-face { font-family:'Noor';  src:url('file://__SRC__/noorehuda.ttf'); }
-          @font-face { font-family:'Calli'; src:url('file://__SRC__/ArefRuqaa-Bold.ttf'); }
           @font-face { font-family:'Solai'; src:url('file://__SRC__/solaimanlipi.ttf'); }
           :root{ --green:#0b5d3b; --green-d:#073d27; --gold:#b8892f; --gold-l:#e2bf6a; --ink:#1b2a41; }
           *{ margin:0; padding:0; box-sizing:border-box; }
@@ -92,25 +84,28 @@ jobs:
           .divider{ position:absolute; left:720px; top:150px; bottom:150px; width:3px;
             background:linear-gradient(transparent,var(--gold) 20%,var(--gold) 80%,transparent); }
 
-          /* ডান: লেখা */
-          .right{ position:absolute; left:790px; right:90px; top:0; bottom:0;
-            display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; }
-          .quran{ font-family:'Calli','Noor'; font-size:200px; line-height:1.6; font-weight:700; color:var(--green);
-            text-shadow:0 4px 0 rgba(226,191,106,.55); direction:rtl; }
-          .quran-bn{ font-size:58px; color:var(--gold); margin-top:-12px; letter-spacing:2px; }
-          .ornament{ width:520px; height:3px; margin:26px 0 30px;
+          /* ডান: লেখা (ফ্রেম থেকে নিরাপদ দূরত্ব রেখে) */
+          .right{ position:absolute; left:790px; right:90px; top:92px; bottom:112px;
+            display:flex; flex-direction:column; align-items:center; justify-content:space-between; text-align:center; }
+
+          /* ক্যালিগ্রাফি মেডালিয়ন (PNG স্বচ্ছ ব্যাকগ্রাউন্ড) */
+          .medal{ width:280px; height:280px; overflow:hidden; display:flex; align-items:center; justify-content:center; }
+          .medal img{ width:350px; height:350px; flex:none; }
+          .quran-bn{ font-size:56px; line-height:1.2; color:var(--gold); letter-spacing:2px; margin-top:22px; }
+          .ornament{ width:520px; height:3px; flex:none;
             background:linear-gradient(90deg,transparent,var(--gold),transparent); position:relative; }
           .ornament::after{ content:'✦'; position:absolute; left:50%; top:50%; transform:translate(-50%,-52%);
-            background:transparent; color:var(--gold); font-size:30px; padding:0 14px; background:#eef1fa; }
-          .card{ width:100%; padding:26px 30px 34px; border-radius:26px;
+            color:var(--gold); font-size:30px; padding:0 14px; background:#eef1fa; }
+
+          .card{ width:100%; padding:14px 30px 28px; border-radius:26px;
             background:linear-gradient(135deg,var(--green),var(--green-d));
             box-shadow:0 14px 40px rgba(7,61,39,.35); border:3px solid var(--gold); position:relative; }
           .num{ position:absolute; top:-40px; right:36px; width:84px; height:84px; border-radius:50%;
             background:var(--gold); color:#fff; font-size:40px; display:__NUMDISP__;
             align-items:center; justify-content:center; border:5px solid #fff; box-shadow:0 6px 16px rgba(0,0,0,.25); }
-          .s-ar{ font-family:'Noor'; font-size:150px; line-height:1.55; color:#fff; direction:rtl; }
-          .s-bn{ font-size:86px; line-height:1.25; color:var(--gold-l); margin-top:-6px; }
-          .tarjuma{ margin-top:38px; display:inline-block; padding:12px 44px; border-radius:60px;
+          .s-ar{ font-family:'Noor'; font-size:130px; line-height:1.5; color:#fff; direction:rtl; }
+          .s-bn{ font-size:80px; line-height:1.2; color:var(--gold-l); margin-top:-4px; }
+          .tarjuma{ display:inline-block; padding:12px 48px 16px; border-radius:60px; line-height:1.3;
             font-size:50px; color:var(--green-d); background:linear-gradient(90deg,#f3dc9c,#e2bf6a,#f3dc9c);
             border:2px solid var(--gold); box-shadow:0 6px 16px rgba(184,137,47,.35); }
           </style></head>
@@ -121,8 +116,10 @@ jobs:
             </div>
             <div class="divider"></div>
             <div class="right">
-              <div class="quran">القرآن الكريم</div>
-              <div class="quran-bn">আল কুরআন</div>
+              <div>
+                <div class="medal"><img src="file://__SRC__/calligraphy.png"></div>
+                <div class="quran-bn">আল কুরআন</div>
+              </div>
               <div class="ornament"></div>
               <div class="card">
                 <div class="num">__NUM__</div>
@@ -133,20 +130,23 @@ jobs:
             </div>
           </body></html>"""
 
-          ar  = os.environ["SURAH_AR"]
-          bn  = os.environ["SURAH_BN"]
-          num = os.environ.get("SURAH_NO", "").strip().translate(BN)   # বাংলা সংখ্যা
+          ar = os.environ["SURAH_AR"]
+          bn = os.environ["SURAH_BN"]
+          no_en = re.sub(r"\D", "", os.environ["SURAH_NO"].translate(TO_EN))   # ফাইলের নামের জন্য ইংরেজি সংখ্যা
+          if not no_en:
+              raise SystemExit("সূরা নম্বর দিতে হবে (শুধু সংখ্যা)")
+          no_bn = no_en.translate(TO_BN)                                         # থাম্বনেইলে বাংলা সংখ্যা
 
           page_html = (TEMPLATE
               .replace("__SRC__", SRC.as_posix())
               .replace("__AR__", html.escape(ar))
               .replace("__BN__", html.escape(bn))
-              .replace("__NUM__", html.escape(num))
-              .replace("__NUMDISP__", "flex" if num else "none"))
+              .replace("__NUM__", no_bn)
+              .replace("__NUMDISP__", "flex"))
 
-          out = ROOT / "output" / "thumbnail.png"
+          out = ROOT / "thumbnail" / f"{no_en}.png"
           out.parent.mkdir(parents=True, exist_ok=True)
-          tmp = ROOT / "output" / "_thumb.html"
+          tmp = ROOT / "_thumb.html"
           tmp.write_text(page_html, encoding="utf-8")
 
           with sync_playwright() as pw:
@@ -154,24 +154,30 @@ jobs:
               pg = b.new_page(viewport={"width": 1920, "height": 1080}, device_scale_factor=2)  # 3840x2160 (4K)
               pg.goto(tmp.as_uri())
               pg.evaluate("document.fonts.ready")
-              pg.wait_for_timeout(500)
+              pg.wait_for_timeout(800)
               pg.screenshot(path=str(out), type="png")
               b.close()
           tmp.unlink(missing_ok=True)
-          print("saved:", out)
+
+          rel = out.relative_to(ROOT).as_posix()
+          print("saved:", rel)
+          if os.environ.get("GITHUB_ENV"):
+              with open(os.environ["GITHUB_ENV"], "a") as f:
+                  f.write(f"THUMB_FILE={rel}\n")
           PY
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: surah-thumbnail
-          path: output/thumbnail.png
+          path: ${{ env.THUMB_FILE }}
 
       - name: Commit thumbnail
         if: ${{ inputs.commit_result }}
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add output/thumbnail.png
-          git diff --cached --quiet || git commit -m "chore: update surah thumbnail [skip ci]"
+          git add thumbnail/
+          git diff --cached --quiet || git commit -m "chore: add thumbnail for surah ${{ inputs.surah_no }} [skip ci]"
+          git pull --rebase origin ${{ github.ref_name }} || true
           git push
