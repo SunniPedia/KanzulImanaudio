@@ -85,6 +85,16 @@ on:
         required: false
         default: true
         type: boolean
+      run_hd:
+        description: 'ধাপ ৬ক: 4K ভিডিও থেকে HD (1920x1080) কপি বানানো (HD ফোল্ডারে commit হবে না)'
+        required: false
+        default: true
+        type: boolean
+      run_release:
+        description: 'ধাপ ৬খ: সূরার তথ্যসহ GitHub Release তৈরি (4K + HD ফাইল সংযুক্ত)'
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: write
@@ -126,9 +136,17 @@ jobs:
           pad = f"{num:03d}"
           print(f"Surah number -> {num} (3-digit: {pad})")
 
+          # 114 টা সূরার আয়াত সংখ্যা (Release এর তথ্যের জন্য)
+          AYAH_COUNTS = [0, 7, 286, 200, 176, 120, 165, 206, 75, 129, 109, 123, 111, 43, 52, 99, 128, 111, 110, 98, 135, 112, 78, 118, 64, 77, 227, 93, 88, 69, 60, 34, 30, 73, 54, 45, 83, 182, 88, 75, 85, 54, 53, 89, 59, 37, 35, 38, 29, 18, 45, 60, 49, 62, 55, 78, 96, 29, 22, 24, 13, 14, 11, 11, 18, 12, 12, 30, 52, 52, 44, 28, 28, 20, 56, 40, 31, 50, 40, 46, 42, 29, 19, 36, 25, 22, 17, 19, 26, 30, 20, 15, 21, 11, 8, 8, 19, 5, 8, 8, 11, 11, 8, 3, 9, 5, 4, 7, 3, 6, 3, 5, 4, 5, 6]
+          ayah_count = AYAH_COUNTS[num]
+          to_bn = str.maketrans("0123456789", "০১২৩৪৫৬৭৮৯")
+
           with open(os.environ["GITHUB_ENV"], "a") as f:
               f.write(f"SURAH_NUM={num}\n")     # যেমন: 1   (ডাউনলোড + থাম্বনেইলের ফাইলের নাম)
               f.write(f"SURAH_PAD={pad}\n")     # যেমন: 001 (মার্জ, ট্যাগ, ছবি, ভিডিও)
+              f.write(f"AYAH_COUNT={ayah_count}\n")                        # যেমন: 7
+              f.write(f"SURAH_NUM_BN={str(num).translate(to_bn)}\n")        # যেমন: ১
+              f.write(f"AYAH_COUNT_BN={str(ayah_count).translate(to_bn)}\n")  # যেমন: ৭
           PY
 
       - name: Setup Python
@@ -1241,18 +1259,162 @@ jobs:
           ls -lh "$FINAL_DIR"/
           rm -rf "$TEMP_VIDEO_DIR" "$TEMP_IMG_DIR" video_list_raw.txt concat_list.txt
 
-      - name: Step 6 - Upload Final Video
+      - name: Step 6 - Upload Final Video (4K)
         if: ${{ inputs.run_video }}
         uses: actions/upload-artifact@v4
         with:
           name: Surah-${{ env.SURAH_PAD }}-4K-Video
-          path: rizwanSurahVideo/
+          # শুধু এই রানের সূরার ভিডিও (ফোল্ডারে থাকা পুরনো সূরার ভিডিও আর artifact এ ঢুকবে না)
+          path: rizwanSurahVideo/${{ env.SURAH_PAD }}.mp4
 
-      - name: Step 6 - Commit Video to Repo
+      # =====================================================================
+      # ধাপ ৬ক: 4K ভিডিও থেকে HD (1920x1080) কপি — রিজোলিউশন কমানো হয় শুধু কপিতে
+      #          মূল 4K ফাইল অক্ষত থাকে। HD রিপোর ফোল্ডারে commit হবে না।
+      # =====================================================================
+      - name: Step 6a - Convert 4K to HD (1920x1080)
+        if: ${{ inputs.run_video && inputs.run_hd }}
+        run: |
+          SRC="rizwanSurahVideo/${SURAH_PAD}.mp4"
+          HD_DIR="hd_videos"
+          HD_FILE="$HD_DIR/${SURAH_PAD}_HD.mp4"
+          mkdir -p "$HD_DIR"
+
+          if [ ! -f "$SRC" ]; then
+            echo "Error: 4K ভিডিও পাওয়া যায়নি: $SRC"
+            exit 1
+          fi
+
+          echo "Converting $SRC -> $HD_FILE (1920x1080)"
+          ffmpeg -y -hide_banner -loglevel error \
+            -i "$SRC" \
+            -vf "scale=1920:1080:flags=lanczos,format=yuv420p" \
+            -c:v libx264 -preset medium -crf 20 \
+            -c:a copy \
+            -movflags +faststart \
+            "$HD_FILE"
+
+          ls -lh "$HD_DIR"/
+
+      - name: Step 6a - Upload HD Video artifact
+        if: ${{ inputs.run_video && inputs.run_hd }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: Surah-${{ env.SURAH_PAD }}-HD-Video
+          path: hd_videos/${{ env.SURAH_PAD }}_HD.mp4
+
+      # =====================================================================
+      # ধাপ ৬গ: শুধু 4K ভিডিও রিপোর ফোল্ডারে commit (HD যাবে না)
+      #          ফাইল ১০০ MB এর বেশি হলে Git LFS দিয়ে commit হবে, নইলে সাধারণ commit
+      # =====================================================================
+      - name: Step 6 - Commit 4K Video to Repo (>100MB হলে Git LFS)
         if: ${{ inputs.run_video }}
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add -f rizwanSurahVideo/
+
+          VIDEO="rizwanSurahVideo/${SURAH_PAD}.mp4"
+          LIMIT=104857600   # GitHub এর সীমা: 100 MiB
+
+          if [ ! -f "$VIDEO" ]; then
+            echo "Error: ভিডিও পাওয়া যায়নি: $VIDEO"
+            exit 1
+          fi
+
+          SIZE=$(stat -c%s "$VIDEO")
+          echo "Video size: $SIZE bytes ($(( SIZE / 1024 / 1024 )) MiB)"
+
+          if [ "$SIZE" -gt "$LIMIT" ]; then
+            echo "ফাইল 100 MiB এর বেশি -> Git LFS দিয়ে commit হচ্ছে"
+            git lfs install
+            git lfs track "$VIDEO"
+            git add .gitattributes
+          else
+            echo "ফাইল 100 MiB এর নিচে -> সাধারণ commit"
+          fi
+
+          git add -f "$VIDEO"
           git commit -m "Added Surah $SURAH_PAD 4K Video - Fixed 3840x2160" || echo "No changes"
-          git push || echo "Push failed - file >100MB, use Artifact"
+          git pull --rebase origin ${{ github.ref_name }} || true
+          git push || { echo "Push failed - Release/Artifact থেকে ভিডিও নিন"; exit 0; }
+
+      # =====================================================================
+      # ধাপ ৬খ: সূরার তথ্যসহ GitHub Release (4K + HD + থাম্বনেইল সংযুক্ত)
+      #          Release এ ফাইল ২ GB পর্যন্ত দেওয়া যায়, তাই ১০০ MB সীমার সমস্যা নেই
+      # =====================================================================
+      - name: Step 6b - Create GitHub Release (সূরার তথ্যসহ)
+        if: ${{ inputs.run_video && inputs.run_release }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARABIC_NAME: ${{ inputs.arabic_name }}
+          BANGLA_NAME: ${{ inputs.bangla_name }}
+          QARI: ${{ inputs.qari }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          TAG="surah-${SURAH_PAD}"
+          VIDEO_4K="rizwanSurahVideo/${SURAH_PAD}.mp4"
+          VIDEO_HD="hd_videos/${SURAH_PAD}_HD.mp4"
+          THUMB="thumbnail/${SURAH_NUM}.png"
+          TITLE="${BANGLA_NAME} (${SURAH_PAD})"
+
+          if [ ! -f "$VIDEO_4K" ]; then
+            echo "Error: 4K ভিডিও পাওয়া যায়নি: $VIDEO_4K"
+            exit 1
+          fi
+
+          # ভিডিওর দৈর্ঘ্য (মিনিট:সেকেন্ড) ও ফাইলের সাইজ
+          DUR=$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "$VIDEO_4K" | cut -d. -f1)
+          DUR_MIN=$(( DUR / 60 ))
+          DUR_SEC=$(( DUR % 60 ))
+          SIZE_4K=$(du -h "$VIDEO_4K" | cut -f1)
+
+          # রিলিজে যে ফাইলগুলো যাবে (নামে 4K/HD স্পষ্ট করে)
+          mkdir -p release_files
+          cp "$VIDEO_4K" "release_files/Surah-${SURAH_PAD}-4K.mp4"
+          ASSETS=("release_files/Surah-${SURAH_PAD}-4K.mp4")
+
+          HD_LINE=""
+          if [ -f "$VIDEO_HD" ]; then
+            cp "$VIDEO_HD" "release_files/Surah-${SURAH_PAD}-HD.mp4"
+            ASSETS+=("release_files/Surah-${SURAH_PAD}-HD.mp4")
+            SIZE_HD=$(du -h "$VIDEO_HD" | cut -f1)
+            HD_LINE="- **HD ভিডিও:** 1920x1080 (${SIZE_HD})"
+          fi
+
+          if [ -f "$THUMB" ]; then
+            cp "$THUMB" "release_files/Surah-${SURAH_PAD}-Thumbnail.png"
+            ASSETS+=("release_files/Surah-${SURAH_PAD}-Thumbnail.png")
+          fi
+
+          # রিলিজের বর্ণনা (সূরার তথ্য)
+          cat > release_notes.md <<EOF
+          ## ${BANGLA_NAME}
+
+          **${ARABIC_NAME}**
+
+          ### সূরার তথ্য
+          - **সূরার নম্বর:** ${SURAH_NUM_BN} (${SURAH_PAD})
+          - **আরবি নাম:** ${ARABIC_NAME}
+          - **বাংলা নাম:** ${BANGLA_NAME}
+          - **মোট আয়াত:** ${AYAH_COUNT_BN} (${AYAH_COUNT})
+          - **ক্বারী:** ${QARI}
+          - **অনুবাদ:** তরজুমায়ে কানযুল ঈমান
+          - **ভিডিওর দৈর্ঘ্য:** ${DUR_MIN} মিনিট ${DUR_SEC} সেকেন্ড
+
+          ### ডাউনলোড
+          - **4K ভিডিও:** 3840x2160 (${SIZE_4K})
+          ${HD_LINE}
+          EOF
+
+          # একই tag এর পুরনো রিলিজ থাকলে মুছে নতুন করে বানানো (আবার রান করলেও কাজ করবে)
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "পুরনো রিলিজ $TAG পাওয়া গেছে -> মুছে নতুন করে তৈরি হচ্ছে"
+            gh release delete "$TAG" --yes --cleanup-tag
+          fi
+
+          gh release create "$TAG" "${ASSETS[@]}" \
+            --target "$BRANCH" \
+            --title "$TITLE" \
+            --notes-file release_notes.md
+
+          echo "Release তৈরি হয়েছে: $TAG"
+          gh release view "$TAG" --json url -q .url
