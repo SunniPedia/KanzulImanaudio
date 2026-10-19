@@ -923,6 +923,7 @@ jobs:
           SURAH: ${{ env.SURAH_PAD }}
           TYPING_SPEED: ${{ inputs.typing_speed }}
           TRANSITION_SECONDS: ${{ inputs.transition_seconds }}
+          METADATA_VALUE: ${{ inputs.metadata_value }}
         run: |
           TEMP_IMG_DIR="temp_${SURAH}_images_fixed"
           TEMP_VIDEO_DIR="temp_${SURAH}_videos"
@@ -1251,9 +1252,21 @@ jobs:
             printf "file '%s'\n" "$(readlink -f "$f")" >> concat_list.txt
           done < video_list_raw.txt
 
+          # ভিডিওর মেটাডাটা: অডিও MP3 এর ট্যাগের মতোই সব ফিল্ডে একই মান (METADATA_VALUE) বসানো হয়।
+          # আগের সব মেটাডাটা মুছে (-map_metadata -1) নতুন করে বসানো হয়, আর bitexact দিয়ে
+          # ffmpeg এর নিজের "Lavf" encoder ট্যাগও বাদ দেওয়া হয়।
           ffmpeg -y -hide_banner -loglevel error \
             -f concat -safe 0 -i concat_list.txt \
-            -c copy \
+            -map 0 -c copy \
+            -map_metadata -1 \
+            -fflags +bitexact -flags:v +bitexact -flags:a +bitexact \
+            -metadata title="$METADATA_VALUE" \
+            -metadata artist="$METADATA_VALUE" \
+            -metadata album="$METADATA_VALUE" \
+            -metadata album_artist="$METADATA_VALUE" \
+            -metadata composer="$METADATA_VALUE" \
+            -metadata genre="$METADATA_VALUE" \
+            -metadata comment="$METADATA_VALUE" \
             "$FINAL_DIR/${SURAH}.mp4"
 
           ls -lh "$FINAL_DIR"/
@@ -1273,6 +1286,8 @@ jobs:
       # =====================================================================
       - name: Step 6a - Convert 4K to HD (1920x1080)
         if: ${{ inputs.run_video && inputs.run_hd }}
+        env:
+          METADATA_VALUE: ${{ inputs.metadata_value }}
         run: |
           SRC="rizwanSurahVideo/${SURAH_PAD}.mp4"
           HD_DIR="hd_videos"
@@ -1291,6 +1306,15 @@ jobs:
             -c:v libx264 -preset medium -crf 20 \
             -c:a copy \
             -movflags +faststart \
+            -map_metadata -1 \
+            -fflags +bitexact -flags:v +bitexact -flags:a +bitexact \
+            -metadata title="$METADATA_VALUE" \
+            -metadata artist="$METADATA_VALUE" \
+            -metadata album="$METADATA_VALUE" \
+            -metadata album_artist="$METADATA_VALUE" \
+            -metadata composer="$METADATA_VALUE" \
+            -metadata genre="$METADATA_VALUE" \
+            -metadata comment="$METADATA_VALUE" \
             "$HD_FILE"
 
           ls -lh "$HD_DIR"/
