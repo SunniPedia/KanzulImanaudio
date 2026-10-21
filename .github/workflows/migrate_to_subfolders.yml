@@ -1,0 +1,54 @@
+name: Migrate Audio to Surah Subfolders (One-time)
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'শুধু দেখাবে কী কী সরবে, আসলে সরাবে না'
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Move flat files into surah subfolders
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          FOLDERS=("Audio/alafasy/128" "Audio/dawateislami" "Audio/bangla" "rizwanaudio")
+
+          for dir in "${FOLDERS[@]}"; do
+            [ -d "$dir" ] || { echo "skip (নেই): $dir"; continue; }
+            echo "== $dir =="
+            count=0
+            # maxdepth 1: শুধু ফোল্ডারের সরাসরি ফাইল, সাবফোল্ডারের ভেতরেরগুলো নয়
+            while IFS= read -r f; do
+              name=$(basename "$f")
+              surah="${name:0:3}"
+              [[ "$surah" =~ ^[0-9]{3}$ ]] || { echo "skip (নাম মেলেনি): $name"; continue; }
+              if [ "$DRY_RUN" = "true" ]; then
+                echo "[DRY] $f -> $dir/$surah/$name"
+              else
+                mkdir -p "$dir/$surah"
+                git mv "$f" "$dir/$surah/$name"
+              fi
+              count=$((count+1))
+            done < <(find "$dir" -maxdepth 1 -type f -name '*.mp3')
+            echo "মোট: $count ফাইল"
+          done
+
+      - name: Commit and push
+        if: ${{ !inputs.dry_run }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git diff --cached --quiet && { echo "No changes"; exit 0; }
+          git commit -m "chore: move audio into per-surah subfolders"
+          git push
