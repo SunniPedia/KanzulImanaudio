@@ -57,11 +57,16 @@ jobs:
             done
           else
             # শুধু পুরনো কাঠামোর ৩-ডিজিট ফোল্ডার (everyayah/ বা dawateislami/ ধরবে না)
-            FOLDERS=$(find "$BASE" -mindepth 1 -maxdepth 1 -type d -regex '.*/[0-9]\{3\}' -printf '%f\n' | sort)
+            FOLDERS=""
+            for d in "$BASE"/[0-9][0-9][0-9]; do
+              [ -d "$d" ] && FOLDERS="$FOLDERS $(basename "$d")"
+            done
           fi
 
           if [ -z "$(echo $FOLDERS)" ]; then
-            echo "সরানোর মতো কোনো পুরনো ফোল্ডার নেই।"
+            echo "::warning::সরানোর মতো কোনো পুরনো ফোল্ডার পাওয়া যায়নি ($BASE/<৩-ডিজিট> ফরম্যাটে)।"
+            echo "$BASE এর ভেতরে এখন যা আছে:"
+            ls -1 "$BASE"
             exit 0
           fi
 
