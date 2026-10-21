@@ -1,0 +1,139 @@
+name: Migrate rizwanaudio old folders -> rizwanaudio/<source>/<surah>
+
+on:
+  workflow_dispatch:
+    inputs:
+      source:
+        description: 'পুরনো ফোল্ডারগুলো কোন সোর্সের ভেতরে যাবে?'
+        required: true
+        default: 'everyayah'
+        type: choice
+        options:
+          - everyayah
+          - dawateislami
+      surah_list:
+        description: 'শুধু এই সূরাগুলো সরাবেন (কমা দিয়ে, যেমন: 1,76,77)। ফাঁকা রাখলে পুরনো কাঠামোর সব ৩-ডিজিট ফোল্ডার সরবে'
+        required: false
+        default: ''
+        type: string
+      dry_run:
+        description: 'শুধু দেখান কী কী সরবে (কিছু পরিবর্তন বা commit হবে না)'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Migrate folders
+        env:
+          SOURCE: ${{ inputs.source }}
+          SURAH_LIST: ${{ inputs.surah_list }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -e
+          BASE="rizwanaudio"
+          DEST_BASE="$BASE/$SOURCE"
+
+          if [ ! -d "$BASE" ]; then
+            echo "Error: $BASE ফোল্ডার পাওয়া যায়নি"
+            exit 1
+          fi
+
+          # কোন কোন সূরার ফোল্ডার সরবে
+          if [ -n "$SURAH_LIST" ]; then
+            FOLDERS=""
+            for s in $(echo "$SURAH_LIST" | tr ',' ' '); do
+              n=$(echo "$s" | tr -dc '0-9')
+              [ -z "$n" ] && continue
+              FOLDERS="$FOLDERS $(printf '%03d' "$((10#$n))")"
+            done
+          else
+            # শুধু পুরনো কাঠামোর ৩-ডিজিট ফোল্ডার (everyayah/ বা dawateislami/ ধরবে না)
+            FOLDERS=$(find "$BASE" -mindepth 1 -maxdepth 1 -type d -regex '.*/[0-9]\{3\}' -printf '%f\n' | sort)
+          fi
+
+          if [ -z "$(echo $FOLDERS)" ]; then
+            echo "সরানোর মতো কোনো পুরনো ফোল্ডার নেই।"
+            exit 0
+          fi
+
+          echo "টার্গেট সোর্স: $SOURCE"
+          echo "সরানো হবে: $(echo $FOLDERS)"
+          echo "Dry run: $DRY_RUN"
+          echo "-----------------------------------"
+
+          mkdir -p "$DEST_BASE"
+          MOVED=0
+
+          for s in $FOLDERS; do
+            SRC="$BASE/$s"
+            DST="$DEST_BASE/$s"
+
+            if [ ! -d "$SRC" ]; then
+              echo "SKIP  $SRC (ফোল্ডার নেই)"
+              continue
+            fi
+
+            COUNT=$(find "$SRC" -type f | wc -l)
+
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "WOULD MOVE  $SRC -> $DST  ($COUNT ফাইল)"
+              [ -d "$DST" ] && echo "            ⚠ $DST আগে থেকেই আছে — ফাইল মার্জ হবে, একই নামের ফাইল বাদ যাবে"
+              continue
+            fi
+
+            if [ ! -d "$DST" ]; then
+              git mv "$SRC" "$DST"
+              echo "MOVED  $SRC -> $DST  ($COUNT ফাইল)"
+            else
+              # গন্তব্য আগে থেকেই আছে: ফাইল ধরে ধরে মার্জ, একই নামের ফাইল ওভাররাইট করা হবে না
+              for f in "$SRC"/*; do
+                [ -e "$f" ] || continue
+                name=$(basename "$f")
+                if [ -e "$DST/$name" ]; then
+                  echo "CONFLICT  $DST/$name আগে থেকেই আছে — $f সরানো হয়নি"
+                else
+                  git mv "$f" "$DST/$name"
+                fi
+              done
+              rmdir "$SRC" 2>/dev/null || echo "NOTE  $SRC এ কিছু ফাইল রয়ে গেছে (conflict)"
+              echo "MERGED  $SRC -> $DST"
+            fi
+            MOVED=$((MOVED + 1))
+          done
+
+          echo "-----------------------------------"
+          echo "মোট ফোল্ডার প্রসেস হয়েছে: $MOVED"
+
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "এটা Dry run ছিল — কিছু পরিবর্তন হয়নি। আসল মাইগ্রেশনের জন্য dry_run বন্ধ করে আবার চালান।"
+          fi
+
+      - name: Commit and push
+        if: ${{ !inputs.dry_run }}
+        env:
+          SOURCE: ${{ inputs.source }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A rizwanaudio/
+          if git diff --staged --quiet; then
+            echo "কোনো পরিবর্তন নেই"
+          else
+            git commit -m "Migrate old rizwanaudio folders to rizwanaudio/${SOURCE}/"
+            git pull --rebase origin ${{ github.ref_name }} || true
+            git push
+          fi
+
+      - name: Show final structure
+        run: |
+          echo "rizwanaudio/ এর বর্তমান কাঠামো:"
+          find rizwanaudio -mindepth 1 -maxdepth 2 -type d | sort | head -n 200
