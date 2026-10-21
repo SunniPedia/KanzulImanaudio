@@ -19,8 +19,16 @@ on:
         type: string
 
       # ---------- ধাপ ১: ডাউনলোড ----------
+      audio_source:
+        description: 'আরবি অডিওর সোর্স বাছাই করুন (everyayah = Audio/alafasy/128/<সূরা>, dawateislami = Audio/dawateislami/<সূরা>)'
+        required: true
+        default: 'everyayah'
+        type: choice
+        options:
+          - everyayah
+          - dawateislami
       qari:
-        description: 'Qari folder name'
+        description: 'Qari folder name (শুধু everyayah সোর্সের জন্য; dawateislami এ ব্যবহার হয় না)'
         required: false
         default: 'Alafasy_128kbps'
         type: string
@@ -39,7 +47,7 @@ on:
         default: 'output'
         type: string
       audio_folder:
-        description: 'Audio folder (মার্জ করা অডিও এখানে থাকে)'
+        description: 'Audio folder (মার্জ করা অডিও এখানে <সূরা>/ সাবফোল্ডারে থাকে)'
         required: false
         default: 'rizwanaudio'
         type: string
@@ -143,7 +151,7 @@ jobs:
 
           with open(os.environ["GITHUB_ENV"], "a") as f:
               f.write(f"SURAH_NUM={num}\n")     # যেমন: 1   (ডাউনলোড + থাম্বনেইলের ফাইলের নাম)
-              f.write(f"SURAH_PAD={pad}\n")     # যেমন: 001 (মার্জ, ট্যাগ, ছবি, ভিডিও)
+              f.write(f"SURAH_PAD={pad}\n")     # যেমন: 001 (মার্জ, ট্যাগ, ছবি, ভিডিও + সাবফোল্ডারের নাম)
               f.write(f"AYAH_COUNT={ayah_count}\n")                        # যেমন: 7
               f.write(f"SURAH_NUM_BN={str(num).translate(to_bn)}\n")        # যেমন: ১
               f.write(f"AYAH_COUNT_BN={str(ayah_count).translate(to_bn)}\n")  # যেমন: ৭
@@ -168,23 +176,50 @@ jobs:
           pip install playwright
           playwright install --with-deps chromium
 
-      - name: Create folder structure
+      - name: Create folder structure + Select Audio Source
+        env:
+          AUDIO_SOURCE: ${{ inputs.audio_source }}
+          QARI: ${{ inputs.qari }}
         run: |
-          mkdir -p Audio/alafasy/128
-          mkdir -p Audio/bangla
-          mkdir -p rizwanaudio
+          # সব অডিও ফোল্ডারের ভেতরে সূরাভিত্তিক সাবফোল্ডার থাকবে, যেমন Audio/dawateislami/001/001001.mp3
+          mkdir -p "Audio/alafasy/128/${SURAH_PAD}"
+          mkdir -p "Audio/dawateislami/${SURAH_PAD}"
+          mkdir -p "Audio/bangla/${SURAH_PAD}"
+          mkdir -p "rizwanaudio/${SURAH_PAD}"
+
+          # সোর্স অনুযায়ী আরবি অডিওর ফোল্ডার ও লেবেল ঠিক করা (ধাপ ১, ২ ও Release এ ব্যবহার হবে)
+          # ARABIC_DIR হলো বেস ফোল্ডার; সূরার সাবফোল্ডার ($ARABIC_DIR/$SURAH_PAD) প্রতিটি ধাপে যোগ করা হয়
+          if [ "$AUDIO_SOURCE" = "dawateislami" ]; then
+            echo "ARABIC_DIR=Audio/dawateislami" >> "$GITHUB_ENV"
+            echo "SOURCE_LABEL=Dawate Islami" >> "$GITHUB_ENV"
+          else
+            echo "ARABIC_DIR=Audio/alafasy/128" >> "$GITHUB_ENV"
+            echo "SOURCE_LABEL=${QARI}" >> "$GITHUB_ENV"
+          fi
+          echo "Audio source: $AUDIO_SOURCE"
 
       # =====================================================================
-      # ধাপ ১: Surah অডিও ডাউনলোড (Alafasy)
+      # ধাপ ১: Surah অডিও ডাউনলোড (Alafasy / Dawate Islami)
       # =====================================================================
       - name: Step 1 - Download Selected Surah
         if: ${{ inputs.run_download }}
         env:
           QARI: ${{ inputs.qari }}
+          AUDIO_SOURCE: ${{ inputs.audio_source }}
         run: |
           SURAH_NUM="$SURAH_NUM"
-          BASE_URL="https://everyayah.com/data/$QARI"
-          DEST_DIR="Audio/alafasy/128"
+          # everyayah -> Audio/alafasy/128/<সূরা> | dawateislami -> Audio/dawateislami/<সূরা>
+          DEST_DIR="$ARABIC_DIR/$SURAH_PAD"
+          mkdir -p "$DEST_DIR"
+
+          if [ "$AUDIO_SOURCE" = "dawateislami" ]; then
+            # ফরম্যাট: https://data2.dawateislami.net/static/images/main-website/quran-arabic-audios/001/A01001001.mp3
+            #          .../quran-arabic-audios/<সূরা ৩ ডিজিট>/A01<সূরা ৩ ডিজিট><আয়াত ৩ ডিজিট>.mp3
+            BASE_URL="https://data2.dawateislami.net/static/images/main-website/quran-arabic-audios"
+            DI_PREFIX="A01"
+          else
+            BASE_URL="https://everyayah.com/data/$QARI"
+          fi
 
           # 114 টা সূরার আয়াত সংখ্যা
           AYAH_COUNTS=(0 7 286 200 176 120 165 206 75 129 109 123 111 43 52 99 128 111 110 98 135 112 78 118 64 77 227 93 88 69 60 34 30 73 54 45 83 182 88 75 85 54 53 89 59 37 35 38 29 18 45 60 49 62 55 78 96 29 22 24 13 14 11 11 18 12 12 30 52 52 44 28 28 20 56 40 31 50 40 46 42 29 19 36 25 22 17 19 26 30 20 15 21 11 8 8 19 5 8 8 11 11 8 3 9 5 4 7 3 6 3 5 4 5 6)
@@ -197,29 +232,36 @@ jobs:
           TOTAL_AYAH=${AYAH_COUNTS[$SURAH_NUM]}
           SURAH_PAD=$(printf "%03d" $SURAH_NUM)
 
-          echo "Downloading Surah $SURAH_NUM (Total Ayahs: $TOTAL_AYAH) from $QARI..."
+          echo "Downloading Surah $SURAH_NUM (Total Ayahs: $TOTAL_AYAH) from $AUDIO_SOURCE..."
 
           for ayah in $(seq 1 $TOTAL_AYAH); do
             AYAH_PAD=$(printf "%03d" $ayah)
+            # লোকাল ফাইলের নাম দুই সোর্সেই একই (যেমন 001001.mp3) — যাতে মার্জ/ট্যাগ/ভিডিও ধাপ অপরিবর্তিত থাকে
             FILE_NAME="${SURAH_PAD}${AYAH_PAD}.mp3"
-            URL="$BASE_URL/$FILE_NAME"
+            if [ "$AUDIO_SOURCE" = "dawateislami" ]; then
+              URL="$BASE_URL/$SURAH_PAD/${DI_PREFIX}${SURAH_PAD}${AYAH_PAD}.mp3"
+            else
+              URL="$BASE_URL/$FILE_NAME"
+            fi
             DEST_PATH="$DEST_DIR/$FILE_NAME"
 
             echo "Downloading $URL -> $DEST_PATH"
-            curl -L --fail --retry 3 -o "$DEST_PATH" "$URL"
+            curl -L --fail --retry 3 -A "Mozilla/5.0" -o "$DEST_PATH" "$URL"
             sleep 0.5
           done
 
-          echo "Done! Files:"
-          ls -lh $DEST_DIR/ | grep $SURAH_PAD
+          echo "Done! Files in $DEST_DIR:"
+          ls -lh "$DEST_DIR"/
 
       - name: Step 1 - Commit and Push Audio Files
         if: ${{ inputs.run_download }}
+        env:
+          AUDIO_SOURCE: ${{ inputs.audio_source }}
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add Audio/
-          git diff --staged --quiet || git commit -m "Add Surah $SURAH_NUM - Alafasy 128kbps"
+          git diff --staged --quiet || git commit -m "Add Surah $SURAH_NUM - $SOURCE_LABEL ($AUDIO_SOURCE)"
           git push
 
       # =====================================================================
@@ -228,21 +270,33 @@ jobs:
       - name: Step 2 - Merge Audios for Specific Surah
         if: ${{ inputs.run_merge }}
         run: |
-          ARABIC_DIR="Audio/alafasy/128"
-          BANGLA_DIR="Audio/bangla"
-          OUTPUT_DIR="rizwanaudio"
+          # ARABIC_DIR আগের ধাপ থেকে আসে (Audio/alafasy/128 অথবা Audio/dawateislami)
+          # সব ফোল্ডারে সূরাভিত্তিক সাবফোল্ডার: <ফোল্ডার>/<সূরা ৩ ডিজিট>/<সূরা><আয়াত>.mp3
           SURAH="$SURAH_PAD"
+          ARABIC_SUB="$ARABIC_DIR/$SURAH"
+          BANGLA_SUB="Audio/bangla/$SURAH"
+          OUTPUT_SUB="rizwanaudio/$SURAH"
 
-          mkdir -p "$OUTPUT_DIR"
+          mkdir -p "$OUTPUT_SUB"
 
           echo "প্রসেস করা হচ্ছে সূরা নম্বর: $SURAH"
+          echo "আরবি: $ARABIC_SUB | বাংলা: $BANGLA_SUB | আউটপুট: $OUTPUT_SUB"
 
-          # নির্দিষ্ট সূরার প্যাটার্ন (যেমন: 001*.mp3) অনুযায়ী ফাইল খোঁজা হচ্ছে
-          for arabic_file in "$ARABIC_DIR"/${SURAH}*.mp3; do
+          if [ ! -d "$ARABIC_SUB" ]; then
+            echo "Error: আরবি অডিও ফোল্ডার পাওয়া যায়নি: $ARABIC_SUB (আগে ধাপ ১ চালান বা মাইগ্রেশন করুন)"
+            exit 1
+          fi
+
+          if [ ! -d "$BANGLA_SUB" ]; then
+            echo "Warning: বাংলা অডিও ফোল্ডার পাওয়া যায়নি: $BANGLA_SUB — শুধু আরবি অডিও কপি হবে"
+          fi
+
+          # নির্দিষ্ট সূরার সাবফোল্ডারের সব mp3 ফাইল
+          for arabic_file in "$ARABIC_SUB"/*.mp3; do
             [ -e "$arabic_file" ] || continue
             file_name=$(basename "$arabic_file")
-            bangla_file="$BANGLA_DIR/$file_name"
-            output_file="$OUTPUT_DIR/$file_name"
+            bangla_file="$BANGLA_SUB/$file_name"
+            output_file="$OUTPUT_SUB/$file_name"
 
             if [ -f "$bangla_file" ]; then
               echo "MERGING $file_name"
@@ -252,14 +306,14 @@ jobs:
             fi
           done
 
-          ls -lh "$OUTPUT_DIR"/
+          ls -lh "$OUTPUT_SUB"/
 
       - name: Step 2 - Upload Artifact (Download from here)
         if: ${{ inputs.run_merge }}
         uses: actions/upload-artifact@v4
         with:
           name: rizwanaudio-Surah-${{ env.SURAH_PAD }}
-          path: rizwanaudio/
+          path: rizwanaudio/${{ env.SURAH_PAD }}/
 
       - name: Step 2 - Force Commit to Repo
         if: ${{ inputs.run_merge }}
@@ -283,15 +337,21 @@ jobs:
           AUDIO_FOLDER: ${{ inputs.audio_folder }}
         run: |
           python3 << 'PY'
-          import os
+          import os, sys
           from mutagen.mp3 import MP3
           from mutagen.id3 import ID3, TIT2, TPE1, TALB, TPE2, TCOM, TCON, COMM, ID3NoHeaderError
 
-          FOLDER = os.environ.get("AUDIO_FOLDER", "rizwanaudio")
+          BASE_FOLDER = os.environ.get("AUDIO_FOLDER", "rizwanaudio")
           PREFIX = os.environ["FILE_PREFIX"]
           META = os.environ["METADATA_VALUE"]
 
-          for fname in os.listdir(FOLDER):
+          # সূরাভিত্তিক সাবফোল্ডার: rizwanaudio/001/
+          FOLDER = os.path.join(BASE_FOLDER, PREFIX)
+          if not os.path.isdir(FOLDER):
+              print(f"Error: সূরার অডিও ফোল্ডার পাওয়া যায়নি: {FOLDER}")
+              sys.exit(1)
+
+          for fname in sorted(os.listdir(FOLDER)):
               if not fname.startswith(PREFIX):
                   continue
               if not fname.lower().endswith(".mp3"):
@@ -950,6 +1010,9 @@ jobs:
           ANIM_DIR       = "anim_layers"
           FPS            = 30
 
+          # মার্জ করা অডিও সূরাভিত্তিক সাবফোল্ডারে থাকে: rizwanaudio/001/001001.mp3
+          SURAH_AUDIO_DIR = os.path.join(AUDIO_DIR, SURAH)
+
           def _num(name, default, lo, hi):
               try:
                   v = float(str(os.environ.get(name, "")).strip())
@@ -1216,10 +1279,13 @@ jobs:
           # ------------------------------------------------------------------
           # মূল লুপ: প্রতিটি আয়াতের ছবি + অডিও -> ভিডিও
           # ------------------------------------------------------------------
+          if not os.path.isdir(SURAH_AUDIO_DIR):
+              print(f"Error: সূরার অডিও ফোল্ডার পাওয়া যায়নি: {SURAH_AUDIO_DIR}")
+
           pattern = os.path.join(IMG_DIR, f"{SURAH}*.jpg")
           for p_img in sorted(glob.glob(pattern)):
               base = os.path.splitext(os.path.basename(p_img))[0]
-              audio_file = os.path.join(AUDIO_DIR, base + ".mp3")
+              audio_file = os.path.join(SURAH_AUDIO_DIR, base + ".mp3")
               if not os.path.isfile(audio_file):
                   print(f"Audio missing: {audio_file} - Skipping")
                   continue
@@ -1371,7 +1437,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ARABIC_NAME: ${{ inputs.arabic_name }}
           BANGLA_NAME: ${{ inputs.bangla_name }}
-          QARI: ${{ inputs.qari }}
           BRANCH: ${{ github.ref_name }}
         run: |
           TAG="surah-${SURAH_PAD}"
@@ -1420,7 +1485,7 @@ jobs:
           - **আরবি নাম:** ${ARABIC_NAME}
           - **বাংলা নাম:** ${BANGLA_NAME}
           - **মোট আয়াত:** ${AYAH_COUNT_BN} (${AYAH_COUNT})
-          - **ক্বারী:** ${QARI}
+          - **অডিও সোর্স/ক্বারী:** ${SOURCE_LABEL}
           - **অনুবাদ:** তরজুমায়ে কানযুল ঈমান
           - **ভিডিওর দৈর্ঘ্য:** ${DUR_MIN} মিনিট ${DUR_SEC} সেকেন্ড
 
