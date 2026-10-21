@@ -1,0 +1,161 @@
+name: Restore main to a specific commit
+
+# ============================================================
+# এই workflow main ব্রাঞ্চকে হুবহু একটি নির্দিষ্ট কমিট (ডিফল্ট: 93b0a21) এর
+# অবস্থায় ফিরিয়ে নেবে। ওই কমিটের পরের সব কমিট/ফাইল main থেকে মুছে যাবে।
+#
+# ব্যবহার: Actions ট্যাব -> "Restore main to a specific commit" -> Run workflow
+# ============================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: "যে কমিটে ফিরতে চান (full বা short SHA)"
+        required: true
+        default: "93b0a21"
+      target_branch:
+        description: "যে ব্রাঞ্চ রিস্টোর হবে"
+        required: true
+        default: "main"
+      delete_other_branches:
+        description: "main ছাড়া বাকি সব ব্রাঞ্চ ডিলিট করবেন? (true/false)"
+        required: true
+        type: boolean
+        default: false
+      delete_all_tags:
+        description: "সব ট্যাগ ডিলিট করবেন? (true/false)"
+        required: true
+        type: boolean
+        default: false
+      confirm:
+        description: "নিশ্চিত করতে বড় হাতের RESTORE লিখুন"
+        required: true
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: restore-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Confirm
+        run: |
+          if [ "${{ github.event.inputs.confirm }}" != "RESTORE" ]; then
+            echo "::error::Confirmation failed. 'RESTORE' লিখতে হবে।"
+            exit 1
+          fi
+
+      - name: Checkout full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # workflow ফাইল পরিবর্তন সহ push করতে PAT (repo + workflow scope) লাগে।
+          # Settings -> Secrets -> Actions -> RESTORE_TOKEN নামে যোগ করুন।
+          # না থাকলে ডিফল্ট GITHUB_TOKEN ব্যবহার হবে।
+          token: ${{ secrets.RESTORE_TOKEN || github.token }}
+
+      - name: Configure git
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Verify target commit exists
+        id: verify
+        env:
+          SHA: ${{ github.event.inputs.commit_sha }}
+        run: |
+          set -euo pipefail
+          git fetch --all --tags --prune
+          if ! git cat-file -e "${SHA}^{commit}" 2>/dev/null; then
+            echo "::error::কমিট ${SHA} রিপোতে পাওয়া যায়নি।"
+            exit 1
+          fi
+          FULL_SHA=$(git rev-parse "${SHA}^{commit}")
+          echo "full_sha=${FULL_SHA}" >> "$GITHUB_OUTPUT"
+          echo "Target commit : ${FULL_SHA}"
+          git log -1 --format='Author : %an <%ae>%nDate   : %ci%nMessage: %s' "${FULL_SHA}"
+
+      - name: Create backup of current branch state
+        id: backup
+        env:
+          BRANCH: ${{ github.event.inputs.target_branch }}
+        run: |
+          set -euo pipefail
+          STAMP=$(date -u +%Y%m%d-%H%M%S)
+          BACKUP="backup/${BRANCH}-before-restore-${STAMP}"
+          if git ls-remote --exit-code --heads origin "${BRANCH}" >/dev/null 2>&1; then
+            git push origin "refs/remotes/origin/${BRANCH}:refs/heads/${BACKUP}"
+            echo "backup_branch=${BACKUP}" >> "$GITHUB_OUTPUT"
+            echo "Backup branch তৈরি হয়েছে: ${BACKUP}"
+          else
+            echo "backup_branch=" >> "$GITHUB_OUTPUT"
+            echo "${BRANCH} এখন remote এ নেই, backup লাগছে না।"
+          fi
+
+      - name: Hard reset target branch to the commit
+        env:
+          BRANCH: ${{ github.event.inputs.target_branch }}
+          FULL_SHA: ${{ steps.verify.outputs.full_sha }}
+        run: |
+          set -euo pipefail
+          git checkout -B "${BRANCH}" "${FULL_SHA}"
+          git reset --hard "${FULL_SHA}"
+          # ট্র্যাক না করা ফাইল/ফোল্ডারও মুছে ফেলা
+          git clean -fdx
+          echo "--- Working tree এখন ${FULL_SHA} এর সমান ---"
+          git status --short | head -n 20 || true
+
+      - name: Force push (overwrite remote branch)
+        env:
+          BRANCH: ${{ github.event.inputs.target_branch }}
+        run: |
+          set -euo pipefail
+          git push origin "${BRANCH}" --force
+          echo "Remote ${BRANCH} এখন $(git rev-parse HEAD)"
+
+      - name: Delete all other branches (optional)
+        if: ${{ github.event.inputs.delete_other_branches == 'true' }}
+        env:
+          BRANCH: ${{ github.event.inputs.target_branch }}
+          BACKUP: ${{ steps.backup.outputs.backup_branch }}
+        run: |
+          set -uo pipefail
+          git ls-remote --heads origin | awk '{print $2}' | sed 's#refs/heads/##' | while read -r b; do
+            if [ "$b" = "${BRANCH}" ] || [ "$b" = "${BACKUP}" ]; then
+              echo "Keeping: $b"
+              continue
+            fi
+            echo "Deleting branch: $b"
+            git push origin --delete "$b" || echo "::warning::'$b' ডিলিট করা যায়নি (protected হতে পারে)"
+          done
+
+      - name: Delete all tags (optional)
+        if: ${{ github.event.inputs.delete_all_tags == 'true' }}
+        run: |
+          set -uo pipefail
+          git ls-remote --tags origin | awk '{print $2}' | grep -v '\^{}' | sed 's#refs/tags/##' | while read -r t; do
+            echo "Deleting tag: $t"
+            git push origin --delete "refs/tags/$t" || echo "::warning::tag '$t' ডিলিট করা যায়নি"
+          done
+
+      - name: Summary
+        env:
+          BRANCH: ${{ github.event.inputs.target_branch }}
+          FULL_SHA: ${{ steps.verify.outputs.full_sha }}
+          BACKUP: ${{ steps.backup.outputs.backup_branch }}
+        run: |
+          {
+            echo "## ✅ Restore সম্পন্ন"
+            echo ""
+            echo "- Branch: \`${BRANCH}\`"
+            echo "- Restored to: \`${FULL_SHA}\`"
+            echo "- Backup branch: \`${BACKUP:-none}\`"
+            echo "- Other branches deleted: ${{ github.event.inputs.delete_other_branches }}"
+            echo "- Tags deleted: ${{ github.event.inputs.delete_all_tags }}"
+          } >> "$GITHUB_STEP_SUMMARY"
