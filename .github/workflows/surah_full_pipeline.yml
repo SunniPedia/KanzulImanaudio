@@ -47,7 +47,7 @@ on:
         default: 'output'
         type: string
       audio_folder:
-        description: 'Audio folder (মার্জ করা অডিও এখানে <সোর্স>/<সূরা>/ সাবফোল্ডারে থাকে, যেমন rizwanaudio/dawateislami/001/)'
+        description: 'Audio folder (মার্জ করা অডিও এখানে <সোর্স>/<সূরা>/ সাবফোল্ডারে থাকে, যেমন rizwanaudio/dawateislami/001/ — সব ধাপ এই একই ফোল্ডার ব্যবহার করে)'
         required: false
         default: 'rizwanaudio'
         type: string
@@ -180,12 +180,19 @@ jobs:
         env:
           AUDIO_SOURCE: ${{ inputs.audio_source }}
           QARI: ${{ inputs.qari }}
+          AUDIO_FOLDER: ${{ inputs.audio_folder }}
         run: |
+          # মার্জ করা অডিওর বেস ফোল্ডার (audio_folder ইনপুট) — ধাপ ২, যাচাই, ৩ ও ৬ সবাই এটাই ব্যবহার করবে,
+          # যাতে এক ধাপে লেখা অডিও অন্য ধাপে "হারিয়ে" না যায়। ফাঁকা থাকলে rizwanaudio।
+          AUDIO_BASE="${AUDIO_FOLDER:-rizwanaudio}"
+          AUDIO_BASE="${AUDIO_BASE%/}"
+          echo "AUDIO_BASE=$AUDIO_BASE" >> "$GITHUB_ENV"
+
           # সব অডিও ফোল্ডারের ভেতরে সূরাভিত্তিক সাবফোল্ডার থাকবে, যেমন Audio/dawateislami/001/001001.mp3
           mkdir -p "Audio/alafasy/128/${SURAH_PAD}"
           mkdir -p "Audio/dawateislami/${SURAH_PAD}"
           mkdir -p "Audio/bangla/${SURAH_PAD}"
-          mkdir -p "rizwanaudio/${AUDIO_SOURCE}/${SURAH_PAD}"
+          mkdir -p "${AUDIO_BASE}/${AUDIO_SOURCE}/${SURAH_PAD}"
 
           # সোর্স অনুযায়ী আরবি অডিওর ফোল্ডার ও লেবেল ঠিক করা (ধাপ ১, ২ ও Release এ ব্যবহার হবে)
           # ARABIC_DIR হলো বেস ফোল্ডার; সূরার সাবফোল্ডার ($ARABIC_DIR/$SURAH_PAD) প্রতিটি ধাপে যোগ করা হয়
@@ -280,8 +287,8 @@ jobs:
           SURAH="$SURAH_PAD"
           ARABIC_SUB="$ARABIC_DIR/$SURAH"
           BANGLA_SUB="Audio/bangla/$SURAH"
-          # আউটপুটে সোর্সের নাম আছে: rizwanaudio/<সোর্স>/<সূরা>/ (SOURCE_KEY আগের ধাপ থেকে আসে)
-          OUTPUT_SUB="rizwanaudio/$SOURCE_KEY/$SURAH"
+          # আউটপুটে সোর্সের নাম আছে: <audio_folder>/<সোর্স>/<সূরা>/ (SOURCE_KEY ও AUDIO_BASE আগের ধাপ থেকে আসে)
+          OUTPUT_SUB="$AUDIO_BASE/$SOURCE_KEY/$SURAH"
 
           mkdir -p "$OUTPUT_SUB"
 
@@ -298,6 +305,7 @@ jobs:
           fi
 
           # নির্দিষ্ট সূরার সাবফোল্ডারের সব mp3 ফাইল
+          MISSING_BN=""
           for arabic_file in "$ARABIC_SUB"/*.mp3; do
             [ -e "$arabic_file" ] || continue
             file_name=$(basename "$arabic_file")
@@ -308,18 +316,75 @@ jobs:
               echo "MERGING $file_name"
               ffmpeg -y -hide_banner -loglevel error -i "$arabic_file" -i "$bangla_file" -filter_complex "[0:a][1:a]concat=n=2:v=0:a=1[a]" -map "[a]" -b:a 128k "$output_file"
             else
+              # বাংলা অডিও নেই -> শুধু আরবি কপি হচ্ছে; কোন কোন আয়াতে এমন হলো মনে রাখা হয়
+              MISSING_BN="$MISSING_BN ${file_name%.mp3}"
               cp "$arabic_file" "$output_file"
             fi
           done
 
+          if [ -n "$(echo $MISSING_BN)" ]; then
+            echo "::warning::বাংলা অডিও পাওয়া যায়নি, শুধু আরবি কপি হয়েছে (সূরা $SURAH): $(echo $MISSING_BN)"
+          fi
+
           ls -lh "$OUTPUT_SUB"/
+
+      # =====================================================================
+      # যাচাই: সূরার প্রতিটি আয়াতের মার্জ করা অডিও আছে কি না (ধাপ ২ এর পরে, কমিট/ট্যাগ/ভিডিওর আগে)
+      #   - নতুন পাথ <audio_folder>/<সোর্স>/<সূরা>/ আগে খোঁজে
+      #   - সেখানে সব আয়াত না পেলে এবং সোর্স everyayah হলে পুরনো <audio_folder>/<সূরা>/ ফোল্ডারে খোঁজে
+      #   - কোনো আয়াত না পেলে মিসিং আয়াতের তালিকা দেখিয়ে এখানেই থামে (অসম্পূর্ণ ভিডিও/কমিট এড়াতে)
+      #   - সফল হলে MERGED_DIR সেট করে; ধাপ ৩ ও ৬ এই ফোল্ডারই ব্যবহার করে
+      # =====================================================================
+      - name: Verify Merged Audio (প্রতিটি আয়াতের অডিও আছে কি না)
+        if: ${{ inputs.run_merge || inputs.run_tags || inputs.run_video }}
+        run: |
+          NEW_DIR="$AUDIO_BASE/$SOURCE_KEY/$SURAH_PAD"
+          LEGACY_DIR="$AUDIO_BASE/$SURAH_PAD"
+
+          # কোন কোন আয়াতের (খালি নয় এমন) mp3 ফাইল নেই — সেই আয়াত নম্বরগুলো ফেরত দেয়
+          missing_in() {
+            local dir="$1" out="" a
+            for a in $(seq 1 "$AYAH_COUNT"); do
+              [ -s "$dir/${SURAH_PAD}$(printf '%03d' "$a").mp3" ] || out="$out $a"
+            done
+            echo "$out"
+          }
+
+          MISSING_NEW="$(echo $(missing_in "$NEW_DIR"))"
+
+          if [ -z "$MISSING_NEW" ]; then
+            MERGED_DIR="$NEW_DIR"
+            echo "OK: $NEW_DIR এ সব $AYAH_COUNT টি আয়াতের অডিও আছে"
+          else
+            echo "নতুন পাথ $NEW_DIR এ মিসিং আয়াত: $MISSING_NEW"
+            MISSING_LEGACY=""
+            LEGACY_OK="no"
+            if [ "$SOURCE_KEY" = "everyayah" ] && [ -d "$LEGACY_DIR" ]; then
+              MISSING_LEGACY="$(echo $(missing_in "$LEGACY_DIR"))"
+              [ -z "$MISSING_LEGACY" ] && LEGACY_OK="yes"
+            fi
+
+            if [ "$LEGACY_OK" = "yes" ]; then
+              MERGED_DIR="$LEGACY_DIR"
+              echo "::warning::নতুন কাঠামোয় অডিও নেই, পুরনো ফোল্ডার $LEGACY_DIR থেকে অডিও নেওয়া হচ্ছে। মাইগ্রেশন workflow চালিয়ে ফাইলগুলো $NEW_DIR এ সরিয়ে নিন।"
+            else
+              echo "::error::সূরা $SURAH_PAD ($SOURCE_KEY) এর অডিও অসম্পূর্ণ। মিসিং আয়াত: $MISSING_NEW"
+              echo "দেখা হয়েছে: $NEW_DIR"
+              [ "$SOURCE_KEY" = "everyayah" ] && echo "দেখা হয়েছে (পুরনো): $LEGACY_DIR"
+              echo "সমাধান: ধাপ ১ (ডাউনলোড) ও ধাপ ২ (মার্জ) চালান, অথবা মাইগ্রেশন workflow দিয়ে পুরনো ফোল্ডার সরান।"
+              exit 1
+            fi
+          fi
+
+          echo "MERGED_DIR=$MERGED_DIR" >> "$GITHUB_ENV"
+          echo "ব্যবহৃত অডিও ফোল্ডার: $MERGED_DIR"
 
       - name: Step 2 - Upload Artifact (Download from here)
         if: ${{ inputs.run_merge }}
         uses: actions/upload-artifact@v4
         with:
           name: rizwanaudio-Surah-${{ env.SURAH_PAD }}-${{ env.SOURCE_KEY }}
-          path: rizwanaudio/${{ env.SOURCE_KEY }}/${{ env.SURAH_PAD }}/
+          path: ${{ env.AUDIO_BASE }}/${{ env.SOURCE_KEY }}/${{ env.SURAH_PAD }}/
 
       - name: Step 2 - Force Commit to Repo
         if: ${{ inputs.run_merge }}
@@ -328,8 +393,8 @@ jobs:
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           rm -rf kanzulImanAudio
           git rm -r --cached kanzulImanAudio || true
-          git add -f rizwanaudio/
-          git commit -m "Merged Surah $SURAH_PAD Audio ($SOURCE_KEY) to rizwanaudio" || echo "No changes to commit"
+          git add -f "$AUDIO_BASE"/
+          git commit -m "Merged Surah $SURAH_PAD Audio ($SOURCE_KEY) to $AUDIO_BASE" || echo "No changes to commit"
           git push
 
       # =====================================================================
@@ -352,8 +417,9 @@ jobs:
           META = os.environ["METADATA_VALUE"]
           SOURCE = os.environ["SOURCE_KEY"]
 
-          # সোর্স + সূরাভিত্তিক সাবফোল্ডার: rizwanaudio/dawateislami/001/
-          FOLDER = os.path.join(BASE_FOLDER, SOURCE, PREFIX)
+          # "Verify Merged Audio" ধাপ যে ফোল্ডার যাচাই করেছে (MERGED_DIR) সেটাই ব্যবহার হয়;
+          # না থাকলে সোর্স + সূরাভিত্তিক সাবফোল্ডার: rizwanaudio/dawateislami/001/
+          FOLDER = os.environ.get("MERGED_DIR") or os.path.join(BASE_FOLDER, SOURCE, PREFIX)
           if not os.path.isdir(FOLDER):
               print(f"Error: সূরার অডিও ফোল্ডার পাওয়া যায়নি: {FOLDER}")
               sys.exit(1)
@@ -1019,7 +1085,8 @@ jobs:
           FPS            = 30
 
           # মার্জ করা অডিও সোর্স + সূরাভিত্তিক সাবফোল্ডারে থাকে: rizwanaudio/dawateislami/001/001001.mp3
-          SURAH_AUDIO_DIR = os.path.join(AUDIO_DIR, SOURCE, SURAH)
+          # "Verify Merged Audio" ধাপ যে ফোল্ডার যাচাই করেছে (MERGED_DIR) সেটাই আগে ব্যবহার হয়
+          SURAH_AUDIO_DIR = os.environ.get("MERGED_DIR") or os.path.join(AUDIO_DIR, SOURCE, SURAH)
 
           def _num(name, default, lo, hi):
               try:
@@ -1288,14 +1355,22 @@ jobs:
           # মূল লুপ: প্রতিটি আয়াতের ছবি + অডিও -> ভিডিও
           # ------------------------------------------------------------------
           if not os.path.isdir(SURAH_AUDIO_DIR):
-              print(f"Error: সূরার অডিও ফোল্ডার পাওয়া যায়নি: {SURAH_AUDIO_DIR}")
+              print(f"::error::সূরার অডিও ফোল্ডার পাওয়া যায়নি: {SURAH_AUDIO_DIR}")
+              raise SystemExit(1)
 
           pattern = os.path.join(IMG_DIR, f"{SURAH}*.jpg")
+          missing_audio = []   # যে আয়াতের অডিও পাওয়া যায়নি
+          failed_clips = []    # যে আয়াতের ক্লিপ তৈরি হয়নি
           for p_img in sorted(glob.glob(pattern)):
               base = os.path.splitext(os.path.basename(p_img))[0]
               audio_file = os.path.join(SURAH_AUDIO_DIR, base + ".mp3")
               if not os.path.isfile(audio_file):
-                  print(f"Audio missing: {audio_file} - Skipping")
+                  if base.endswith("000"):
+                      # আয়াত ০ (শুধু শিরোনাম) এর অডিও থাকে না — এটা স্বাভাবিক
+                      print(f"[INFO] {base}: আয়াত ০ এর অডিও নেই - Skipping")
+                  else:
+                      print(f"Audio missing: {audio_file}")
+                      missing_audio.append(base)
                   continue
               out_file = os.path.join(TEMP_VIDEO_DIR, base + ".mp4")
               print(f"Processing: {base}.jpg -> {base}.mp4")
@@ -1310,7 +1385,17 @@ jobs:
               if not done:
                   fixed = os.path.join(TEMP_IMG_DIR, base + ".jpg")
                   make_canvas_fixed(p_img, fixed)
-                  make_static_clip(fixed, audio_file, out_file)
+                  ok = make_static_clip(fixed, audio_file, out_file)
+                  if not ok or not os.path.isfile(out_file) or os.path.getsize(out_file) == 0:
+                      failed_clips.append(base)
+
+          # কোনো আয়াত বাদ রেখে অসম্পূর্ণ সূরার ভিডিও যেন না বানানো হয়
+          if missing_audio or failed_clips:
+              if missing_audio:
+                  print(f"::error::এই আয়াতগুলোর অডিও পাওয়া যায়নি ({SURAH_AUDIO_DIR}): {', '.join(missing_audio)}")
+              if failed_clips:
+                  print(f"::error::এই আয়াতগুলোর ক্লিপ তৈরি হয়নি: {', '.join(failed_clips)}")
+              raise SystemExit(1)
           PY
 
           if ! ls "$TEMP_VIDEO_DIR"/${SURAH}*.mp4 1> /dev/null 2>&1; then
