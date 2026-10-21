@@ -47,7 +47,7 @@ on:
         default: 'output'
         type: string
       audio_folder:
-        description: 'Audio folder (মার্জ করা অডিও এখানে <সূরা>/ সাবফোল্ডারে থাকে)'
+        description: 'Audio folder (মার্জ করা অডিও এখানে <সোর্স>/<সূরা>/ সাবফোল্ডারে থাকে, যেমন rizwanaudio/dawateislami/001/)'
         required: false
         default: 'rizwanaudio'
         type: string
@@ -185,7 +185,7 @@ jobs:
           mkdir -p "Audio/alafasy/128/${SURAH_PAD}"
           mkdir -p "Audio/dawateislami/${SURAH_PAD}"
           mkdir -p "Audio/bangla/${SURAH_PAD}"
-          mkdir -p "rizwanaudio/${SURAH_PAD}"
+          mkdir -p "rizwanaudio/${AUDIO_SOURCE}/${SURAH_PAD}"
 
           # সোর্স অনুযায়ী আরবি অডিওর ফোল্ডার ও লেবেল ঠিক করা (ধাপ ১, ২ ও Release এ ব্যবহার হবে)
           # ARABIC_DIR হলো বেস ফোল্ডার; সূরার সাবফোল্ডার ($ARABIC_DIR/$SURAH_PAD) প্রতিটি ধাপে যোগ করা হয়
@@ -197,6 +197,11 @@ jobs:
             echo "SOURCE_LABEL=${QARI}" >> "$GITHUB_ENV"
           fi
           echo "Audio source: $AUDIO_SOURCE"
+
+          # মার্জ করা অডিও / ভিডিও / রিলিজের পাথ ও নামে সোর্স যোগ হয়, যাতে everyayah আর dawateislami
+          # এর ফাইল একে অপরকে ওভাররাইট না করে (যেমন rizwanaudio/dawateislami/001/001001.mp3)
+          echo "SOURCE_KEY=$AUDIO_SOURCE" >> "$GITHUB_ENV"
+          echo "VIDEO_NAME=${SURAH_PAD}_${AUDIO_SOURCE}" >> "$GITHUB_ENV"
 
       # =====================================================================
       # ধাপ ১: Surah অডিও ডাউনলোড (Alafasy / Dawate Islami)
@@ -275,7 +280,8 @@ jobs:
           SURAH="$SURAH_PAD"
           ARABIC_SUB="$ARABIC_DIR/$SURAH"
           BANGLA_SUB="Audio/bangla/$SURAH"
-          OUTPUT_SUB="rizwanaudio/$SURAH"
+          # আউটপুটে সোর্সের নাম আছে: rizwanaudio/<সোর্স>/<সূরা>/ (SOURCE_KEY আগের ধাপ থেকে আসে)
+          OUTPUT_SUB="rizwanaudio/$SOURCE_KEY/$SURAH"
 
           mkdir -p "$OUTPUT_SUB"
 
@@ -312,8 +318,8 @@ jobs:
         if: ${{ inputs.run_merge }}
         uses: actions/upload-artifact@v4
         with:
-          name: rizwanaudio-Surah-${{ env.SURAH_PAD }}
-          path: rizwanaudio/${{ env.SURAH_PAD }}/
+          name: rizwanaudio-Surah-${{ env.SURAH_PAD }}-${{ env.SOURCE_KEY }}
+          path: rizwanaudio/${{ env.SOURCE_KEY }}/${{ env.SURAH_PAD }}/
 
       - name: Step 2 - Force Commit to Repo
         if: ${{ inputs.run_merge }}
@@ -323,7 +329,7 @@ jobs:
           rm -rf kanzulImanAudio
           git rm -r --cached kanzulImanAudio || true
           git add -f rizwanaudio/
-          git commit -m "Merged Surah $SURAH_PAD Audio to rizwanaudio" || echo "No changes to commit"
+          git commit -m "Merged Surah $SURAH_PAD Audio ($SOURCE_KEY) to rizwanaudio" || echo "No changes to commit"
           git push
 
       # =====================================================================
@@ -344,9 +350,10 @@ jobs:
           BASE_FOLDER = os.environ.get("AUDIO_FOLDER", "rizwanaudio")
           PREFIX = os.environ["FILE_PREFIX"]
           META = os.environ["METADATA_VALUE"]
+          SOURCE = os.environ["SOURCE_KEY"]
 
-          # সূরাভিত্তিক সাবফোল্ডার: rizwanaudio/001/
-          FOLDER = os.path.join(BASE_FOLDER, PREFIX)
+          # সোর্স + সূরাভিত্তিক সাবফোল্ডার: rizwanaudio/dawateislami/001/
+          FOLDER = os.path.join(BASE_FOLDER, SOURCE, PREFIX)
           if not os.path.isdir(FOLDER):
               print(f"Error: সূরার অডিও ফোল্ডার পাওয়া যায়নি: {FOLDER}")
               sys.exit(1)
@@ -399,7 +406,7 @@ jobs:
           if git diff --staged --quiet; then
             echo "No changes"
           else
-            git commit -m "fix: MP3 ID3V1+ID3V2 set to ${{ inputs.metadata_value }}, LyricsTag cleared for ${SURAH_PAD}*"
+            git commit -m "fix: MP3 ID3V1+ID3V2 set to ${{ inputs.metadata_value }}, LyricsTag cleared for ${SOURCE_KEY}/${SURAH_PAD}*"
             git push
           fi
 
@@ -1003,6 +1010,7 @@ jobs:
           IMG_DIR        = os.environ["IMG_DIR"]
           AUDIO_DIR      = os.environ["AUDIO_DIR"]
           SURAH          = os.environ["SURAH"]
+          SOURCE         = os.environ["SOURCE_KEY"]
           TEMP_IMG_DIR   = os.environ["TEMP_IMG_DIR"]
           TEMP_VIDEO_DIR = os.environ["TEMP_VIDEO_DIR"]
           TARGET_W       = int(os.environ.get("TARGET_W", "3840"))
@@ -1010,8 +1018,8 @@ jobs:
           ANIM_DIR       = "anim_layers"
           FPS            = 30
 
-          # মার্জ করা অডিও সূরাভিত্তিক সাবফোল্ডারে থাকে: rizwanaudio/001/001001.mp3
-          SURAH_AUDIO_DIR = os.path.join(AUDIO_DIR, SURAH)
+          # মার্জ করা অডিও সোর্স + সূরাভিত্তিক সাবফোল্ডারে থাকে: rizwanaudio/dawateislami/001/001001.mp3
+          SURAH_AUDIO_DIR = os.path.join(AUDIO_DIR, SOURCE, SURAH)
 
           def _num(name, default, lo, hi):
               try:
@@ -1333,7 +1341,7 @@ jobs:
             -metadata composer="$METADATA_VALUE" \
             -metadata genre="$METADATA_VALUE" \
             -metadata comment="$METADATA_VALUE" \
-            "$FINAL_DIR/${SURAH}.mp4"
+            "$FINAL_DIR/${VIDEO_NAME}.mp4"
 
           ls -lh "$FINAL_DIR"/
           rm -rf "$TEMP_VIDEO_DIR" "$TEMP_IMG_DIR" video_list_raw.txt concat_list.txt
@@ -1342,9 +1350,9 @@ jobs:
         if: ${{ inputs.run_video }}
         uses: actions/upload-artifact@v4
         with:
-          name: Surah-${{ env.SURAH_PAD }}-4K-Video
-          # শুধু এই রানের সূরার ভিডিও (ফোল্ডারে থাকা পুরনো সূরার ভিডিও আর artifact এ ঢুকবে না)
-          path: rizwanSurahVideo/${{ env.SURAH_PAD }}.mp4
+          name: Surah-${{ env.VIDEO_NAME }}-4K-Video
+          # শুধু এই রানের সূরা + সোর্সের ভিডিও (ফোল্ডারে থাকা পুরনো ভিডিও আর artifact এ ঢুকবে না)
+          path: rizwanSurahVideo/${{ env.VIDEO_NAME }}.mp4
 
       # =====================================================================
       # ধাপ ৬ক: 4K ভিডিও থেকে HD (1920x1080) কপি — রিজোলিউশন কমানো হয় শুধু কপিতে
@@ -1355,9 +1363,9 @@ jobs:
         env:
           METADATA_VALUE: ${{ inputs.metadata_value }}
         run: |
-          SRC="rizwanSurahVideo/${SURAH_PAD}.mp4"
+          SRC="rizwanSurahVideo/${VIDEO_NAME}.mp4"
           HD_DIR="hd_videos"
-          HD_FILE="$HD_DIR/${SURAH_PAD}_HD.mp4"
+          HD_FILE="$HD_DIR/${VIDEO_NAME}_HD.mp4"
           mkdir -p "$HD_DIR"
 
           if [ ! -f "$SRC" ]; then
@@ -1389,8 +1397,8 @@ jobs:
         if: ${{ inputs.run_video && inputs.run_hd }}
         uses: actions/upload-artifact@v4
         with:
-          name: Surah-${{ env.SURAH_PAD }}-HD-Video
-          path: hd_videos/${{ env.SURAH_PAD }}_HD.mp4
+          name: Surah-${{ env.VIDEO_NAME }}-HD-Video
+          path: hd_videos/${{ env.VIDEO_NAME }}_HD.mp4
 
       # =====================================================================
       # ধাপ ৬গ: শুধু 4K ভিডিও রিপোর ফোল্ডারে commit (HD যাবে না)
@@ -1402,7 +1410,7 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
-          VIDEO="rizwanSurahVideo/${SURAH_PAD}.mp4"
+          VIDEO="rizwanSurahVideo/${VIDEO_NAME}.mp4"
           LIMIT=104857600   # GitHub এর সীমা: 100 MiB
 
           if [ ! -f "$VIDEO" ]; then
@@ -1423,7 +1431,7 @@ jobs:
           fi
 
           git add -f "$VIDEO"
-          git commit -m "Added Surah $SURAH_PAD 4K Video - Fixed 3840x2160" || echo "No changes"
+          git commit -m "Added Surah $SURAH_PAD 4K Video ($SOURCE_KEY) - Fixed 3840x2160" || echo "No changes"
           git pull --rebase origin ${{ github.ref_name }} || true
           git push || { echo "Push failed - Release/Artifact থেকে ভিডিও নিন"; exit 0; }
 
@@ -1439,11 +1447,11 @@ jobs:
           BANGLA_NAME: ${{ inputs.bangla_name }}
           BRANCH: ${{ github.ref_name }}
         run: |
-          TAG="surah-${SURAH_PAD}"
-          VIDEO_4K="rizwanSurahVideo/${SURAH_PAD}.mp4"
-          VIDEO_HD="hd_videos/${SURAH_PAD}_HD.mp4"
+          TAG="surah-${SURAH_PAD}-${SOURCE_KEY}"
+          VIDEO_4K="rizwanSurahVideo/${VIDEO_NAME}.mp4"
+          VIDEO_HD="hd_videos/${VIDEO_NAME}_HD.mp4"
           THUMB="thumbnail/${SURAH_NUM}.png"
-          TITLE="${BANGLA_NAME} (${SURAH_PAD})"
+          TITLE="${BANGLA_NAME} (${SURAH_PAD}) - ${SOURCE_LABEL}"
 
           if [ ! -f "$VIDEO_4K" ]; then
             echo "Error: 4K ভিডিও পাওয়া যায়নি: $VIDEO_4K"
@@ -1458,13 +1466,13 @@ jobs:
 
           # রিলিজে যে ফাইলগুলো যাবে (নামে 4K/HD স্পষ্ট করে)
           mkdir -p release_files
-          cp "$VIDEO_4K" "release_files/Surah-${SURAH_PAD}-4K.mp4"
-          ASSETS=("release_files/Surah-${SURAH_PAD}-4K.mp4")
+          cp "$VIDEO_4K" "release_files/Surah-${VIDEO_NAME}-4K.mp4"
+          ASSETS=("release_files/Surah-${VIDEO_NAME}-4K.mp4")
 
           HD_LINE=""
           if [ -f "$VIDEO_HD" ]; then
-            cp "$VIDEO_HD" "release_files/Surah-${SURAH_PAD}-HD.mp4"
-            ASSETS+=("release_files/Surah-${SURAH_PAD}-HD.mp4")
+            cp "$VIDEO_HD" "release_files/Surah-${VIDEO_NAME}-HD.mp4"
+            ASSETS+=("release_files/Surah-${VIDEO_NAME}-HD.mp4")
             SIZE_HD=$(du -h "$VIDEO_HD" | cut -f1)
             HD_LINE="- **HD ভিডিও:** 1920x1080 (${SIZE_HD})"
           fi
