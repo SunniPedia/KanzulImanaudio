@@ -1,4 +1,4 @@
-name: All Surah Full Pipeline - Download → Merge → Tags → Thumbnail → 4K Video
+name: 0Rizwan_All Surah Full Pipeline - Download → Merge → Tags → Thumbnail → 4K Video
 
 on:
   workflow_dispatch:
