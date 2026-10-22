@@ -1,0 +1,414 @@
+name: Migrate Folder Structure (Old → Qari-wise New Structure)
+
+# =====================================================================
+# এই workflow টি শুধু একবার চালানোর জন্য (One-time Migration)।
+#
+# পুরনো স্ট্রাকচার                          →  নতুন স্ট্রাকচার
+# ---------------------------------------------------------------------
+# Audio/alafasy/128/001001.mp3              →  Audio/<qari>/001/001.mp3
+# Audio/bangla/001001.mp3                   →  Audio/bangla/<qari>/001/001.mp3
+# rizwanaudio/001001.mp3                    →  rizwanaudio/<qari>/001/001.mp3
+# rizwanSurahVideo/001.mp4                  →  rizwanSurahVideo/<qari>/001.mp4
+#                                              (অথবা nested হলে <qari>/001/001.mp4)
+#
+# ফাইলের নামের নিয়ম: আগে ছিল SSSAAA.mp3 (সূরা ৩ অঙ্ক + আয়াত ৩ অঙ্ক),
+# এখন সূরা হয়ে গেছে ফোল্ডার, ফাইলের নাম শুধু আয়াত নম্বর (AAA.mp3)।
+#
+# নিরাপত্তা:
+#  - dry_run = true থাকলে কিছুই বদলায় না, শুধু রিপোর্ট দেখায় (ডিফল্ট)।
+#  - নতুন জায়গায় একই নামের ফাইল থাকলে overwrite = false হলে স্কিপ হয়।
+#  - ফোল্ডারের ভেতরের শুধু পুরনো প্যাটার্নের ফাইলই সরে (SSSAAA.mp3 / SSS.mp4),
+#    আগে থেকে থাকা নতুন সাবফোল্ডারে হাত পড়ে না।
+#  - Git LFS এ থাকা ভিডিওর .gitattributes এন্ট্রিও নতুন পাথে আপডেট হয়।
+#  - এই workflow রিপোর ইতিহাসে git এর মাধ্যমে commit করে, তাই চাইলে revert করা যাবে।
+# =====================================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      qari_folder:
+        description: 'নতুন ক্বারী ফোল্ডারের নাম — যেমন: alafasy (সব ফাইল এই নামের ফোল্ডারে যাবে)'
+        required: true
+        default: 'alafasy'
+        type: string
+      old_arabic_dir:
+        description: 'পুরনো আরবি অডিও ফোল্ডার (যেখানে 001001.mp3 টাইপ ফাইল আছে)'
+        required: false
+        default: 'Audio/alafasy/128'
+        type: string
+      old_bangla_dir:
+        description: 'পুরনো বাংলা অডিও ফোল্ডার'
+        required: false
+        default: 'Audio/bangla'
+        type: string
+      old_merged_dir:
+        description: 'পুরনো মার্জ করা অডিও ফোল্ডার'
+        required: false
+        default: 'rizwanaudio'
+        type: string
+      old_video_dir:
+        description: 'পুরনো সূরা ভিডিও ফোল্ডার'
+        required: false
+        default: 'rizwanSurahVideo'
+        type: string
+      video_layout:
+        description: 'ভিডিওর নতুন গঠন: flat = <qari>/001.mp4 , nested = <qari>/001/001.mp4'
+        required: false
+        default: 'flat'
+        type: choice
+        options:
+          - flat
+          - nested
+
+      # ---------- কোন কোন অংশ migrate হবে ----------
+      migrate_arabic:
+        description: 'আরবি অডিও migrate করা (Audio/<qari>/SSS/AAA.mp3)'
+        required: false
+        default: true
+        type: boolean
+      migrate_bangla:
+        description: 'বাংলা অডিও migrate করা (Audio/bangla/<qari>/SSS/AAA.mp3)'
+        required: false
+        default: true
+        type: boolean
+      migrate_merged:
+        description: 'মার্জ করা অডিও migrate করা (rizwanaudio/<qari>/SSS/AAA.mp3)'
+        required: false
+        default: true
+        type: boolean
+      migrate_video:
+        description: 'সূরা ভিডিও migrate করা (rizwanSurahVideo/<qari>/...)'
+        required: false
+        default: true
+        type: boolean
+
+      # ---------- নিরাপত্তা ----------
+      overwrite:
+        description: 'নতুন জায়গায় একই ফাইল থাকলে overwrite করবে? (false হলে স্কিপ)'
+        required: false
+        default: false
+        type: boolean
+      dry_run:
+        description: 'Dry run: true হলে শুধু রিপোর্ট দেখাবে, কিছু বদলাবে না। আসল migration এর জন্য false দিন'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      # =====================================================================
+      # ধাপ ১: Checkout (Git LFS সহ, যাতে LFS এ থাকা ভিডিও ঠিকমতো সরানো যায়)
+      # =====================================================================
+      - name: Checkout repo (with Git LFS)
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      # =====================================================================
+      # ধাপ ২: বর্তমান অবস্থার ছবি (migration এর আগে)
+      # =====================================================================
+      - name: Show current structure (Before)
+        run: |
+          echo "===== Before: Audio ====="
+          find Audio -maxdepth 3 -type d 2>/dev/null | sort | head -50 || true
+          echo
+          echo "===== Before: rizwanaudio (file count) ====="
+          find rizwanaudio -type f 2>/dev/null | wc -l || true
+          echo
+          echo "===== Before: rizwanSurahVideo ====="
+          find rizwanSurahVideo -type f 2>/dev/null | sort | head -50 || true
+          echo
+          echo "===== .gitattributes ====="
+          cat .gitattributes 2>/dev/null || echo "(.gitattributes নেই)"
+
+      # =====================================================================
+      # ধাপ ৩: Migration (Python — পুরো লজিক এখানে)
+      # =====================================================================
+      - name: Migrate files to new structure
+        env:
+          QARI: ${{ inputs.qari_folder }}
+          OLD_ARABIC: ${{ inputs.old_arabic_dir }}
+          OLD_BANGLA: ${{ inputs.old_bangla_dir }}
+          OLD_MERGED: ${{ inputs.old_merged_dir }}
+          OLD_VIDEO: ${{ inputs.old_video_dir }}
+          VIDEO_LAYOUT: ${{ inputs.video_layout }}
+          DO_ARABIC: ${{ inputs.migrate_arabic }}
+          DO_BANGLA: ${{ inputs.migrate_bangla }}
+          DO_MERGED: ${{ inputs.migrate_merged }}
+          DO_VIDEO: ${{ inputs.migrate_video }}
+          OVERWRITE: ${{ inputs.overwrite }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          python3 << 'PY'
+          import os, re, shutil, sys, pathlib
+
+          def flag(name):
+              return os.environ.get(name, "false").strip().lower() == "true"
+
+          DRY       = flag("DRY_RUN")
+          OVERWRITE = flag("OVERWRITE")
+          QARI      = os.environ["QARI"].strip().strip("/")
+          LAYOUT    = os.environ.get("VIDEO_LAYOUT", "flat").strip()
+
+          if not re.fullmatch(r"[A-Za-z0-9._-]+", QARI):
+              print("Error: ক্বারী ফোল্ডারের নামে শুধু ইংরেজি অক্ষর, সংখ্যা, '.', '_' ও '-' চলবে")
+              sys.exit(1)
+
+          OLD_ARABIC = os.environ["OLD_ARABIC"].strip().strip("/")
+          OLD_BANGLA = os.environ["OLD_BANGLA"].strip().strip("/")
+          OLD_MERGED = os.environ["OLD_MERGED"].strip().strip("/")
+          OLD_VIDEO  = os.environ["OLD_VIDEO"].strip().strip("/")
+
+          # নতুন রুট ফোল্ডারগুলো
+          NEW_ARABIC = f"Audio/{QARI}"
+          NEW_BANGLA = f"Audio/bangla/{QARI}"
+          NEW_MERGED = f"rizwanaudio/{QARI}"
+          NEW_VIDEO  = f"rizwanSurahVideo/{QARI}"
+
+          AUDIO_RE = re.compile(r"^(\d{3})(\d{3})\.mp3$", re.IGNORECASE)   # SSSAAA.mp3
+          VIDEO_RE = re.compile(r"^(\d{3})\.mp4$", re.IGNORECASE)          # SSS.mp4
+
+          report = []
+          def log(msg=""):
+              print(msg)
+              report.append(msg)
+
+          stats = {"moved": 0, "skipped_exists": 0, "skipped_invalid": 0, "overwritten": 0}
+          moved_pairs = []     # (src, dst) সব সরানো ফাইল
+          video_pairs = []     # LFS .gitattributes আপডেটের জন্য
+
+          def plan_audio(old_dir, new_dir, title):
+              log(f"\n=== {title} ===")
+              log(f"পুরনো: {old_dir}/SSSAAA.mp3  ->  নতুন: {new_dir}/SSS/AAA.mp3")
+              if not os.path.isdir(old_dir):
+                  log(f"[SKIP] পুরনো ফোল্ডার নেই: {old_dir}")
+                  return []
+              pairs = []
+              # শুধু ফোল্ডারের সরাসরি ফাইল (সাবফোল্ডার, যেমন নতুন qari ফোল্ডার, ছোঁয়া হয় না)
+              for name in sorted(os.listdir(old_dir)):
+                  src = os.path.join(old_dir, name)
+                  if not os.path.isfile(src):
+                      continue
+                  m = AUDIO_RE.match(name)
+                  if not m:
+                      if name.lower().endswith(".mp3"):
+                          log(f"[SKIP-INVALID] নাম মেলেনি (SSSAAA.mp3 হতে হবে): {src}")
+                          stats["skipped_invalid"] += 1
+                      continue
+                  sura, ayah = m.group(1), m.group(2)
+                  if not (1 <= int(sura) <= 114) or int(ayah) < 1:
+                      log(f"[SKIP-INVALID] সূরা/আয়াত নম্বর সীমার বাইরে: {src}")
+                      stats["skipped_invalid"] += 1
+                      continue
+                  dst = os.path.join(new_dir, sura, f"{ayah}.mp3")
+                  pairs.append((src, dst))
+              log(f"মোট পাওয়া ফাইল: {len(pairs)}")
+              return pairs
+
+          def plan_video(old_dir, new_dir, layout):
+              log(f"\n=== সূরা ভিডিও ===")
+              if layout == "nested":
+                  log(f"পুরনো: {old_dir}/SSS.mp4  ->  নতুন: {new_dir}/SSS/SSS.mp4")
+              else:
+                  log(f"পুরনো: {old_dir}/SSS.mp4  ->  নতুন: {new_dir}/SSS.mp4")
+              if not os.path.isdir(old_dir):
+                  log(f"[SKIP] পুরনো ফোল্ডার নেই: {old_dir}")
+                  return []
+              pairs = []
+              for name in sorted(os.listdir(old_dir)):
+                  src = os.path.join(old_dir, name)
+                  if not os.path.isfile(src):
+                      continue
+                  m = VIDEO_RE.match(name)
+                  if not m:
+                      if name.lower().endswith(".mp4"):
+                          log(f"[SKIP-INVALID] নাম মেলেনি (SSS.mp4 হতে হবে): {src}")
+                          stats["skipped_invalid"] += 1
+                      continue
+                  sura = m.group(1)
+                  if not (1 <= int(sura) <= 114):
+                      log(f"[SKIP-INVALID] সূরা নম্বর সীমার বাইরে: {src}")
+                      stats["skipped_invalid"] += 1
+                      continue
+                  if layout == "nested":
+                      dst = os.path.join(new_dir, sura, f"{sura}.mp4")
+                  else:
+                      dst = os.path.join(new_dir, f"{sura}.mp4")
+                  pairs.append((src, dst))
+              log(f"মোট পাওয়া ফাইল: {len(pairs)}")
+              return pairs
+
+          all_pairs = []
+          if flag("DO_ARABIC"):
+              all_pairs += plan_audio(OLD_ARABIC, NEW_ARABIC, "আরবি অডিও")
+          if flag("DO_BANGLA"):
+              all_pairs += plan_audio(OLD_BANGLA, NEW_BANGLA, "বাংলা অডিও")
+          if flag("DO_MERGED"):
+              all_pairs += plan_audio(OLD_MERGED, NEW_MERGED, "মার্জ করা অডিও (rizwanaudio)")
+          if flag("DO_VIDEO"):
+              video_pairs = plan_video(OLD_VIDEO, NEW_VIDEO, LAYOUT)
+              all_pairs += video_pairs
+
+          # ---- দুটি ফাইল একই গন্তব্যে যেতে চাইলে আগেই ধরা (ডেটা হারানো ঠেকাতে) ----
+          seen = {}
+          for s, d in all_pairs:
+              if d in seen and seen[d] != s:
+                  log(f"Error: দুটি ফাইল একই গন্তব্যে যাচ্ছে -> {d}\n   {seen[d]}\n   {s}")
+                  sys.exit(1)
+              seen[d] = s
+
+          log("\n=== সরানো শুরু ===" if not DRY else "\n=== DRY RUN: নিচের কাজগুলো হবে (কিছুই বদলানো হয়নি) ===")
+          for src, dst in all_pairs:
+              exists = os.path.exists(dst)
+              if exists and not OVERWRITE:
+                  log(f"[SKIP-EXISTS] {dst} আগে থেকেই আছে, {src} সরানো হয়নি")
+                  stats["skipped_exists"] += 1
+                  continue
+              tag = "OVERWRITE" if exists else "MOVE"
+              log(f"[{tag}] {src}  ->  {dst}")
+              if not DRY:
+                  os.makedirs(os.path.dirname(dst), exist_ok=True)
+                  if exists:
+                      os.remove(dst)
+                      stats["overwritten"] += 1
+                  shutil.move(src, dst)
+              stats["moved"] += 1
+              moved_pairs.append((src, dst))
+
+          # ---- Git LFS: .gitattributes এ ভিডিওর পুরনো পাথ -> নতুন পাথ ----
+          ga = pathlib.Path(".gitattributes")
+          moved_videos = {s: d for s, d in moved_pairs if s.lower().endswith(".mp4")}
+          if moved_videos and ga.exists():
+              log("\n=== .gitattributes আপডেট (Git LFS) ===")
+              lines = ga.read_text(encoding="utf-8").splitlines()
+              out, changed = [], 0
+              for line in lines:
+                  parts = line.split(None, 1)
+                  if parts and parts[0] in moved_videos:
+                      new_line = moved_videos[parts[0]] + (" " + parts[1] if len(parts) > 1 else "")
+                      log(f"[ATTR] {parts[0]}  ->  {moved_videos[parts[0]]}")
+                      out.append(new_line)
+                      changed += 1
+                  else:
+                      out.append(line)
+              if changed and not DRY:
+                  ga.write_text("\n".join(out) + "\n", encoding="utf-8")
+              if not changed:
+                  log("কোনো LFS এন্ট্রি পাওয়া যায়নি (ভিডিও সাধারণ commit এ আছে, সমস্যা নেই)")
+
+          # ---- ফাঁকা হয়ে যাওয়া পুরনো ফোল্ডার মুছে ফেলা ----
+          if not DRY:
+              log("\n=== ফাঁকা পুরনো ফোল্ডার পরিষ্কার ===")
+              for d in {OLD_ARABIC, OLD_BANGLA, OLD_MERGED, OLD_VIDEO}:
+                  # নতুন রুটের ভেতরে থাকা ফোল্ডার (যেমন Audio/bangla/<qari>) কখনো মোছা হবে না
+                  if d in {NEW_ARABIC, NEW_BANGLA, NEW_MERGED, NEW_VIDEO}:
+                      continue
+                  if os.path.isdir(d) and not os.listdir(d):
+                      os.rmdir(d)
+                      log(f"[RMDIR] {d}")
+
+          # ---- যাচাই: সরানো প্রতিটি ফাইল নতুন জায়গায় আছে কিনা ----
+          if not DRY:
+              bad = [d for _, d in moved_pairs if not os.path.isfile(d)]
+              if bad:
+                  log("Error: নিচের ফাইল নতুন জায়গায় পাওয়া যায়নি:")
+                  for b in bad:
+                      log(f"   {b}")
+                  sys.exit(1)
+              log(f"\nযাচাই OK: {len(moved_pairs)} টি ফাইল নতুন জায়গায় আছে")
+
+          log("\n=== সারসংক্ষেপ ===")
+          log(f"Mode            : {'DRY RUN (কিছু বদলায়নি)' if DRY else 'REAL MIGRATION'}")
+          log(f"সরানো/সরানো হবে : {stats['moved']}")
+          log(f"Overwrite       : {stats['overwritten']}")
+          log(f"স্কিপ (আছে)     : {stats['skipped_exists']}")
+          log(f"স্কিপ (ভুল নাম) : {stats['skipped_invalid']}")
+
+          with open("migration_report.txt", "w", encoding="utf-8") as f:
+              f.write("\n".join(report) + "\n")
+
+          summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary:
+              with open(summary, "a", encoding="utf-8") as f:
+                  f.write("## Migration Report\n\n")
+                  f.write(f"- **Mode:** {'DRY RUN' if DRY else 'REAL MIGRATION'}\n")
+                  f.write(f"- **ক্বারী ফোল্ডার:** `{QARI}`\n")
+                  f.write(f"- **সরানো / সরানো হবে:** {stats['moved']}\n")
+                  f.write(f"- **Overwrite:** {stats['overwritten']}\n")
+                  f.write(f"- **স্কিপ (আগে থেকেই আছে):** {stats['skipped_exists']}\n")
+                  f.write(f"- **স্কিপ (ভুল নাম):** {stats['skipped_invalid']}\n")
+          PY
+
+      # =====================================================================
+      # ধাপ ৪: রিপোর্ট artifact হিসেবে সংরক্ষণ
+      # =====================================================================
+      - name: Upload migration report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-report
+          path: migration_report.txt
+          if-no-files-found: ignore
+
+      # =====================================================================
+      # ধাপ ৫: নতুন অবস্থার ছবি (migration এর পরে) — শুধু আসল রানে
+      # =====================================================================
+      - name: Show new structure (After)
+        if: ${{ !inputs.dry_run }}
+        env:
+          QARI: ${{ inputs.qari_folder }}
+        run: |
+          echo "===== After: Audio ====="
+          find Audio -maxdepth 3 -type d 2>/dev/null | sort | head -80 || true
+          echo
+          echo "===== After: rizwanaudio/$QARI (সূরা অনুযায়ী ফাইল সংখ্যা) ====="
+          for d in rizwanaudio/"$QARI"/*/; do
+            [ -d "$d" ] && echo "$d : $(ls "$d" | wc -l) files"
+          done 2>/dev/null | head -120 || true
+          echo
+          echo "===== After: rizwanSurahVideo ====="
+          find rizwanSurahVideo -type f 2>/dev/null | sort | head -120 || true
+          echo
+          echo "===== .gitattributes ====="
+          cat .gitattributes 2>/dev/null || echo "(.gitattributes নেই)"
+
+      # =====================================================================
+      # ধাপ ৬: Commit & Push — শুধু আসল রানে (dry_run = false)
+      #   - git add -A দিয়ে পুরনো পাথের মুছে ফেলা ও নতুন পাথের যোগ দুটোই stage হয়
+      #   - -f দিয়ে .gitignore এ থাকলেও নতুন ফাইল যোগ হয় (মূল pipeline এর মতোই)
+      #   - LFS ফাইল git add এর সময় নতুন .gitattributes অনুযায়ী pointer হয়ে যায়
+      # =====================================================================
+      - name: Commit and Push migration
+        if: ${{ !inputs.dry_run }}
+        env:
+          BRANCH: ${{ github.ref_name }}
+          QARI: ${{ inputs.qari_folder }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add -A -f -- Audio rizwanaudio rizwanSurahVideo 2>/dev/null || true
+          git add -A -- .gitattributes 2>/dev/null || true
+
+          if git diff --cached --quiet; then
+            echo "কোনো পরিবর্তন নেই, commit এর কিছু নেই"
+            exit 0
+          fi
+
+          echo "===== Staged changes (সারসংক্ষেপ) ====="
+          git diff --cached --stat | tail -5
+          git diff --cached --name-status -M | head -40
+
+          git commit -m "chore: migrate to qari-wise folder structure ($QARI) [skip ci]"
+          git pull --rebase origin "$BRANCH" || true
+          git push
+
+          echo "Migration commit সম্পন্ন হয়েছে।"
