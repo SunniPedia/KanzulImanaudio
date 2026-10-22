@@ -1102,7 +1102,7 @@ jobs:
 
             if [ -f "$bangla_file" ]; then
               echo "MERGING $file_name"
-              ffmpeg -y -hide_banner -loglevel error -i "$arabic_file" -i "$bangla_file" -filter_complex "[0:a][1:a]concat=n=2:v=0:a=1[a]" -map "[a]" -b:a 128k "$output_file"
+              ffmpeg -y -hide_banner -loglevel error -i "$arabic_file" -i "$bangla_file" -filter_complex "[0:a][1:a]concat=n=2:v=0:a=1[a]" -map "[a]" -ar 44100 -ac 2 -b:a 128k "$output_file"
             else
               cp "$arabic_file" "$output_file"
             fi
@@ -1348,7 +1348,7 @@ jobs:
                      "-i", audio_file,
                      "-vf", "format=yuv420p", "-r", str(FPS),
                      "-c:v", "libx264", "-tune", "stillimage", "-preset", "medium", "-crf", "18",
-                     "-c:a", "aac", "-b:a", "192k",
+                     "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
                      "-shortest", out_file]
               r = subprocess.run(cmd)
               return r.returncode == 0
@@ -1507,7 +1507,7 @@ jobs:
                      "-map", "[v]", "-map", "3:a",
                      "-r", str(FPS),
                      "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p",
-                     "-c:a", "aac", "-b:a", "192k",
+                     "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
                      "-t", f"{dur:.3f}", out_file]
 
               log_path = out_file + ".log"
