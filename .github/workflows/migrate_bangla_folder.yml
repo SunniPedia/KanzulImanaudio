@@ -1,0 +1,318 @@
+name: Migrate Bangla Folder (Audio/bangla/<qari>/... → Audio/bangla/001/001.mp3)
+
+# =====================================================================
+# শুধু বাংলা অডিও ফোল্ডার ঠিক করার জন্য — একবার চালানোর workflow।
+#
+# কী ঠিক করে:
+#  ১) ভুল করে তৈরি হওয়া ক্বারী ফোল্ডার (ডিফল্ট: Audio/bangla/alafasy/...)
+#     থেকে সব ফাইল এক ধাপ উপরে তোলে:
+#        Audio/bangla/alafasy/001/001.mp3  →  Audio/bangla/001/001.mp3
+#        Audio/bangla/alafasy/001001.mp3   →  Audio/bangla/001/001.mp3   (সমতল নামে থাকলেও)
+#  ২) Audio/bangla এর সরাসরি থাকা পুরনো নামের ফাইল সূরা-ফোল্ডারে ঢোকায়:
+#        Audio/bangla/005003.mp3           →  Audio/bangla/005/003.mp3
+#        Audio/bangla/075000.mp3           →  Audio/bangla/075/000.mp3   (আয়াত ০০০ ও সামলায়)
+#
+# নিরাপত্তা:
+#  - dry_run = true (ডিফল্ট) থাকলে কিছুই বদলায় না, শুধু রিপোর্ট দেখায়।
+#  - দুটি ফাইল একই গন্তব্যে যেতে চাইলে কিছু সরানোর আগেই থেমে যায় (ডেটা হারানো ঠেকাতে)।
+#  - গন্তব্যে একই ফাইল আগে থেকে থাকলে overwrite = false হলে স্কিপ হয়।
+#  - চেনা প্যাটার্নের বাইরের ফাইল (যেমন .txt) ছোঁয়া হয় না, রিপোর্টে দেখানো হয়।
+#  - সরানোর পর প্রতিটি ফাইল নতুন জায়গায় আছে কিনা যাচাই করা হয়।
+#  - git এর মাধ্যমে commit হয়, তাই চাইলে revert করা যাবে।
+# =====================================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      wrong_folder:
+        description: 'Audio/bangla এর ভেতরের যে ক্বারী ফোল্ডারটি ভুলে তৈরি হয়েছে (এর ভেতরের সব ফাইল উপরে উঠবে)'
+        required: false
+        default: 'alafasy'
+        type: string
+      migrate_root_files:
+        description: 'Audio/bangla এর সরাসরি থাকা SSSAAA.mp3 ফাইলও সূরা-ফোল্ডারে (SSS/AAA.mp3) সরানো'
+        required: false
+        default: true
+        type: boolean
+      allow_ayah_zero:
+        description: 'আয়াত 000 ওয়ালা ফাইলও (যেমন 075000.mp3 → 075/000.mp3) সরানো'
+        required: false
+        default: true
+        type: boolean
+      overwrite:
+        description: 'গন্তব্যে একই ফাইল থাকলে overwrite করবে? (false হলে স্কিপ)'
+        required: false
+        default: false
+        type: boolean
+      dry_run:
+        description: 'Dry run: true হলে শুধু রিপোর্ট দেখাবে, কিছু বদলাবে না। আসল migration এর জন্য false দিন'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  migrate-bangla:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      # =====================================================================
+      # migration এর আগের অবস্থা
+      # =====================================================================
+      - name: Show current structure (Before)
+        env:
+          WRONG: ${{ inputs.wrong_folder }}
+        run: |
+          echo "===== Audio/bangla (সরাসরি ফাইল সংখ্যা) ====="
+          find Audio/bangla -maxdepth 1 -type f 2>/dev/null | wc -l || true
+          echo
+          echo "===== Audio/bangla (সাবফোল্ডার) ====="
+          find Audio/bangla -maxdepth 1 -type d 2>/dev/null | sort | head -50 || true
+          echo
+          echo "===== Audio/bangla/$WRONG (গঠন) ====="
+          find "Audio/bangla/$WRONG" -maxdepth 2 2>/dev/null | sort | head -60 || true
+
+      # =====================================================================
+      # Migration (Python)
+      # =====================================================================
+      - name: Migrate Bangla audio to Audio/bangla/SSS/AAA.mp3
+        env:
+          WRONG_FOLDER: ${{ inputs.wrong_folder }}
+          DO_ROOT: ${{ inputs.migrate_root_files }}
+          ALLOW_AYAH_ZERO: ${{ inputs.allow_ayah_zero }}
+          OVERWRITE: ${{ inputs.overwrite }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          python3 << 'PY'
+          import os, re, shutil, sys
+
+          def flag(name):
+              return os.environ.get(name, "false").strip().lower() == "true"
+
+          DRY       = flag("DRY_RUN")
+          OVERWRITE = flag("OVERWRITE")
+          ALLOW0    = flag("ALLOW_AYAH_ZERO")
+          DO_ROOT   = flag("DO_ROOT")
+          ROOT      = "Audio/bangla"
+          WRONG     = os.environ.get("WRONG_FOLDER", "alafasy").strip().strip("/")
+
+          # ---- ইনপুট যাচাই ----
+          if not WRONG:
+              print("Error: wrong_folder এর নাম দিতে হবে (যেমন: alafasy)")
+              sys.exit(1)
+          if not re.fullmatch(r"[A-Za-z0-9._-]+", WRONG) or WRONG in (".", ".."):
+              print("Error: wrong_folder এ শুধু ইংরেজি অক্ষর, সংখ্যা, '.', '_' ও '-' চলবে")
+              sys.exit(1)
+          if re.fullmatch(r"\d{3}", WRONG):
+              print("Error: wrong_folder একটি সূরা-ফোল্ডার (৩ অঙ্কের সংখ্যা) হতে পারবে না — এটা ভুলে দিলে সঠিক ফাইল উপরে উঠে যেত")
+              sys.exit(1)
+          if not os.path.isdir(ROOT):
+              print(f"Error: {ROOT} ফোল্ডার পাওয়া যায়নি")
+              sys.exit(1)
+
+          WRONG_DIR = os.path.join(ROOT, WRONG)
+          FLAT_RE = re.compile(r"^(\d{3})(\d{3})\.mp3$", re.IGNORECASE)        # SSSAAA.mp3
+          REL_RE  = re.compile(r"^(\d{3})/(\d{3})\.mp3$", re.IGNORECASE)       # SSS/AAA.mp3
+
+          report = []
+          def log(msg=""):
+              print(msg)
+              report.append(msg)
+
+          stats = {"moved": 0, "overwritten": 0, "skipped_exists": 0, "skipped_unknown": 0, "skipped_invalid": 0}
+          pairs = []          # (src, dst, কোথা থেকে)
+
+          def valid_numbers(sura, ayah):
+              s, a = int(sura), int(ayah)
+              if not (1 <= s <= 114):
+                  return False
+              if a == 0:
+                  return ALLOW0
+              return True
+
+          # ---- ১) ভুল ক্বারী ফোল্ডারের ভেতরের ফাইল -> Audio/bangla/SSS/AAA.mp3 ----
+          log(f"=== ১) {WRONG_DIR} এর ফাইল উপরে তোলা ===")
+          if os.path.isdir(WRONG_DIR):
+              count = 0
+              for dp, dn, fn in os.walk(WRONG_DIR):
+                  dn.sort()
+                  for name in sorted(fn):
+                      src = os.path.join(dp, name)
+                      rel = os.path.relpath(src, WRONG_DIR).replace(os.sep, "/")
+                      m = REL_RE.match(rel) or (FLAT_RE.match(name) if rel == name else None)
+                      if not m:
+                          log(f"[SKIP-UNKNOWN] চেনা প্যাটার্ন নয়, ছোঁয়া হয়নি: {src}")
+                          stats["skipped_unknown"] += 1
+                          continue
+                      sura, ayah = m.group(1), m.group(2)
+                      if not valid_numbers(sura, ayah):
+                          log(f"[SKIP-INVALID] সূরা/আয়াত নম্বর গ্রহণযোগ্য নয় (আয়াত 000 বন্ধ থাকলেও এখানে আসবে): {src}")
+                          stats["skipped_invalid"] += 1
+                          continue
+                      pairs.append((src, os.path.join(ROOT, sura, f"{ayah}.mp3"), f"{WRONG}/"))
+                      count += 1
+              log(f"পাওয়া ফাইল: {count}")
+          else:
+              log(f"[SKIP] {WRONG_DIR} নেই — এই অংশে করার কিছু নেই")
+
+          # ---- ২) Audio/bangla এর সরাসরি থাকা SSSAAA.mp3 -> SSS/AAA.mp3 ----
+          log("\n=== ২) Audio/bangla এর সরাসরি ফাইল সূরা-ফোল্ডারে ===")
+          if DO_ROOT:
+              count = 0
+              for name in sorted(os.listdir(ROOT)):
+                  src = os.path.join(ROOT, name)
+                  if not os.path.isfile(src):
+                      continue
+                  m = FLAT_RE.match(name)
+                  if not m:
+                      log(f"[SKIP-UNKNOWN] চেনা প্যাটার্ন নয়, ছোঁয়া হয়নি: {src}")
+                      stats["skipped_unknown"] += 1
+                      continue
+                  sura, ayah = m.group(1), m.group(2)
+                  if not valid_numbers(sura, ayah):
+                      log(f"[SKIP-INVALID] সূরা/আয়াত নম্বর গ্রহণযোগ্য নয় (allow_ayah_zero = false হলে 000 স্কিপ হয়): {src}")
+                      stats["skipped_invalid"] += 1
+                      continue
+                  pairs.append((src, os.path.join(ROOT, sura, f"{ayah}.mp3"), "root"))
+                  count += 1
+              log(f"পাওয়া ফাইল: {count}")
+          else:
+              log("[SKIP] migrate_root_files = false")
+
+          # ---- দুটি ফাইল একই গন্তব্যে যেতে চাইলে সরানোর আগেই থামা ----
+          seen, conflicts = {}, []
+          for src, dst, origin in pairs:
+              if dst in seen and seen[dst][0] != src:
+                  conflicts.append((dst, seen[dst], (src, origin)))
+              else:
+                  seen[dst] = (src, origin)
+          if conflicts:
+              log("\nError: নিচের গন্তব্যে একাধিক ফাইল যেতে চাইছে — কিছুই সরানো হয়নি। কোনটি রাখবেন ঠিক করে একটি হাতে সরিয়ে আবার চালান:")
+              for dst, a, b in conflicts:
+                  log(f"   {dst}\n      <- {a[0]}  ({a[1]})\n      <- {b[0]}  ({b[1]})")
+              with open("bangla_migration_report.txt", "w", encoding="utf-8") as f:
+                  f.write("\n".join(report) + "\n")
+              sys.exit(1)
+
+          # ---- সরানো ----
+          log("\n=== সরানো শুরু ===" if not DRY else "\n=== DRY RUN: নিচের কাজগুলো হবে (কিছুই বদলানো হয়নি) ===")
+          moved = []
+          for src, dst, origin in pairs:
+              exists = os.path.exists(dst)
+              if exists and not OVERWRITE:
+                  log(f"[SKIP-EXISTS] {dst} আগে থেকেই আছে, {src} সরানো হয়নি")
+                  stats["skipped_exists"] += 1
+                  continue
+              tag = "OVERWRITE" if exists else "MOVE"
+              log(f"[{tag}] {src}  ->  {dst}")
+              if not DRY:
+                  os.makedirs(os.path.dirname(dst), exist_ok=True)
+                  if exists:
+                      os.remove(dst)
+                      stats["overwritten"] += 1
+                  shutil.move(src, dst)
+              stats["moved"] += 1
+              moved.append(dst)
+
+          # ---- ফাঁকা হয়ে যাওয়া ভুল ফোল্ডার মুছে ফেলা ----
+          if not DRY and os.path.isdir(WRONG_DIR):
+              log(f"\n=== ফাঁকা ফোল্ডার পরিষ্কার ({WRONG_DIR}) ===")
+              for dp, dn, fn in os.walk(WRONG_DIR, topdown=False):
+                  if not os.listdir(dp):
+                      os.rmdir(dp)
+                      log(f"[RMDIR] {dp}")
+              if os.path.isdir(WRONG_DIR):
+                  left = sum(len(f) for _, _, f in os.walk(WRONG_DIR))
+                  log(f"[KEEP] {WRONG_DIR} এ এখনও {left} টি ফাইল আছে (স্কিপ হওয়া ফাইল), তাই ফোল্ডার রাখা হলো")
+
+          # ---- যাচাই ----
+          if not DRY:
+              bad = [d for d in moved if not os.path.isfile(d)]
+              if bad:
+                  log("Error: নিচের ফাইল নতুন জায়গায় পাওয়া যায়নি:")
+                  for b in bad:
+                      log(f"   {b}")
+                  sys.exit(1)
+              log(f"\nযাচাই OK: {len(moved)} টি ফাইল নতুন জায়গায় আছে")
+
+          log("\n=== সারসংক্ষেপ ===")
+          log(f"Mode              : {'DRY RUN (কিছু বদলায়নি)' if DRY else 'REAL MIGRATION'}")
+          log(f"সরানো / সরানো হবে : {stats['moved']}")
+          log(f"Overwrite         : {stats['overwritten']}")
+          log(f"স্কিপ (আছে)       : {stats['skipped_exists']}")
+          log(f"স্কিপ (অচেনা নাম) : {stats['skipped_unknown']}")
+          log(f"স্কিপ (অগ্রহণযোগ্য): {stats['skipped_invalid']}")
+
+          with open("bangla_migration_report.txt", "w", encoding="utf-8") as f:
+              f.write("\n".join(report) + "\n")
+
+          summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary:
+              with open(summary, "a", encoding="utf-8") as f:
+                  f.write("## Bangla Migration Report\n\n")
+                  f.write(f"- **Mode:** {'DRY RUN' if DRY else 'REAL MIGRATION'}\n")
+                  f.write(f"- **ভুল ফোল্ডার:** `Audio/bangla/{WRONG}`\n")
+                  f.write(f"- **সরানো / সরানো হবে:** {stats['moved']}\n")
+                  f.write(f"- **Overwrite:** {stats['overwritten']}\n")
+                  f.write(f"- **স্কিপ (আছে):** {stats['skipped_exists']}\n")
+                  f.write(f"- **স্কিপ (অচেনা নাম):** {stats['skipped_unknown']}\n")
+                  f.write(f"- **স্কিপ (অগ্রহণযোগ্য):** {stats['skipped_invalid']}\n")
+          PY
+
+      - name: Upload migration report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: bangla-migration-report
+          path: bangla_migration_report.txt
+          if-no-files-found: ignore
+
+      # =====================================================================
+      # migration এর পরের অবস্থা — শুধু আসল রানে
+      # =====================================================================
+      - name: Show new structure (After)
+        if: ${{ !inputs.dry_run }}
+        run: |
+          echo "===== Audio/bangla (সরাসরি ফাইল সংখ্যা — ০ হওয়ার কথা) ====="
+          find Audio/bangla -maxdepth 1 -type f 2>/dev/null | wc -l || true
+          echo
+          echo "===== Audio/bangla (সূরা অনুযায়ী ফাইল সংখ্যা) ====="
+          for d in Audio/bangla/*/; do
+            [ -d "$d" ] && echo "$d : $(ls "$d" | wc -l) files"
+          done 2>/dev/null | head -130 || true
+
+      # =====================================================================
+      # Commit & Push — শুধু আসল রানে (dry_run = false)
+      #   git add -A দিয়ে পুরনো পাথের মুছে ফেলা ও নতুন পাথের যোগ দুটোই stage হয়
+      # =====================================================================
+      - name: Commit and Push migration
+        if: ${{ !inputs.dry_run }}
+        env:
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add -A -f -- Audio/bangla
+
+          if git diff --cached --quiet; then
+            echo "কোনো পরিবর্তন নেই, commit এর কিছু নেই"
+            exit 0
+          fi
+
+          echo "===== Staged changes (সারসংক্ষেপ) ====="
+          git diff --cached --stat | tail -5
+          git diff --cached --name-status -M | head -40
+
+          git commit -m "chore: fix bangla audio folder -> Audio/bangla/SSS/AAA.mp3 [skip ci]"
+          git pull --rebase origin "$BRANCH" || true
+          git push
+
+          echo "Migration commit সম্পন্ন হয়েছে।"
