@@ -1,0 +1,163 @@
+name: Check Audio Params (sample rate / channels mismatch ধরার জন্য)
+
+# =====================================================================
+# শুধু পরীক্ষা করে, কিছু বদলায় না, commit ও করে না।
+# একটা সূরার সব MP3 এর sample rate / channels / codec / দৈর্ঘ্য দেখায়
+# এবং আলাদা প্যারামিটারের ফাইল থাকলে ধরিয়ে দেয়।
+#
+# যা দেখে:
+#   ১) Audio/<qari>/SSS/*.mp3            (ডাউনলোড করা আরবি অডিও)
+#   ২) Audio/bangla/SSS/*.mp3            (বাংলা অনুবাদের অডিও)
+#   ৩) <audio_folder>/<qari>/SSS/*.mp3   (মার্জ করা অডিও — ভিডিওতে এটাই যায়)
+#   ৪) rizwanSurahVideo/<qari>/SSS.mp4   (চূড়ান্ত ভিডিওর অডিও স্ট্রিম)
+# =====================================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      surah_number:
+        description: 'সূরার নম্বর (যেমন: 75)'
+        required: true
+        default: '75'
+        type: string
+      qari_folder:
+        description: 'ক্বারী ফোল্ডারের নাম (যেমন: dawateislami বা alafasy)'
+        required: true
+        default: 'dawateislami'
+        type: string
+      audio_folder:
+        description: 'মার্জ করা অডিওর রুট ফোল্ডার'
+        required: false
+        default: 'rizwanaudio'
+        type: string
+      check_video:
+        description: 'চূড়ান্ত ভিডিওর অডিও স্ট্রিমও দেখবে? (ফাইল Git LFS এ থাকলে সময় লাগবে)'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          lfs: ${{ inputs.check_video }}
+
+      - name: Install FFmpeg (ffprobe)
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Inspect audio parameters
+        env:
+          SURAH_INPUT: ${{ inputs.surah_number }}
+          QARI: ${{ inputs.qari_folder }}
+          AUDIO_FOLDER: ${{ inputs.audio_folder }}
+          CHECK_VIDEO: ${{ inputs.check_video }}
+        run: |
+          python3 << 'PY'
+          import os, re, json, subprocess, sys, glob
+          from collections import defaultdict
+
+          raw = os.environ["SURAH_INPUT"].translate(str.maketrans("০১২৩৪৫৬৭৮৯", "0123456789"))
+          digits = re.sub(r"\D", "", raw)
+          if not digits or not (1 <= int(digits) <= 114):
+              sys.exit("Error: সূরার নম্বর ১-১১৪ হতে হবে")
+          SURAH = f"{int(digits):03d}"
+          QARI = os.environ["QARI"].strip().strip("/")
+          AUDIO_FOLDER = os.environ["AUDIO_FOLDER"].strip().strip("/")
+          CHECK_VIDEO = os.environ.get("CHECK_VIDEO", "false").lower() == "true"
+
+          def probe(path):
+              r = subprocess.run(
+                  ["ffprobe", "-v", "error", "-select_streams", "a:0",
+                   "-show_entries", "stream=codec_name,sample_rate,channels,bit_rate:format=duration",
+                   "-of", "json", path],
+                  capture_output=True, text=True)
+              try:
+                  j = json.loads(r.stdout)
+                  s = j["streams"][0]
+                  return {
+                      "codec": s.get("codec_name", "?"),
+                      "sr": str(s.get("sample_rate", "?")),
+                      "ch": str(s.get("channels", "?")),
+                      "br": str(int(s.get("bit_rate", 0)) // 1000) + "k" if s.get("bit_rate") else "?",
+                      "dur": float(j.get("format", {}).get("duration", 0) or 0),
+                  }
+              except Exception:
+                  return None
+
+          problems = []
+
+          def check_dir(title, folder):
+              print(f"\n===== {title}: {folder} =====")
+              files = sorted(glob.glob(os.path.join(folder, "*.mp3")))
+              if not files:
+                  print("  (কোনো mp3 পাওয়া যায়নি)")
+                  return
+              groups = defaultdict(list)
+              print(f"  {'ফাইল':<12}{'codec':<8}{'sample_rate':<13}{'channels':<10}{'bitrate':<9}{'duration'}")
+              for f in files:
+                  p = probe(f)
+                  name = os.path.basename(f)
+                  if not p:
+                      print(f"  {name:<12}!! ffprobe পড়তে পারেনি (ফাইল নষ্ট হতে পারে)")
+                      problems.append(f"{title}: {name} পড়া যায়নি")
+                      continue
+                  print(f"  {name:<12}{p['codec']:<8}{p['sr']:<13}{p['ch']:<10}{p['br']:<9}{p['dur']:.2f}s")
+                  groups[(p["sr"], p["ch"])].append(name)
+              print(f"  --- মোট {len(files)} ফাইল, আলাদা (sample_rate, channels) জোড়া: {len(groups)}")
+              for (sr, ch), names in groups.items():
+                  shown = ", ".join(names[:8]) + (" ..." if len(names) > 8 else "")
+                  print(f"      sr={sr} ch={ch}  ->  {len(names)} টি: {shown}")
+              if len(groups) > 1:
+                  msg = f"{title}: একাধিক প্যারামিটার পাওয়া গেছে ({len(groups)} ধরনের) — -c copy দিয়ে জোড়া লাগালে এটাই সমস্যা করে"
+                  print("  !! " + msg)
+                  problems.append(msg)
+
+          check_dir("আরবি (ডাউনলোড)", f"Audio/{QARI}/{SURAH}")
+          check_dir("বাংলা", f"Audio/bangla/{SURAH}")
+          check_dir("মার্জ করা (ভিডিওতে যায়)", f"{AUDIO_FOLDER}/{QARI}/{SURAH}")
+
+          if CHECK_VIDEO:
+              vpath = f"rizwanSurahVideo/{QARI}/{SURAH}.mp4"
+              print(f"\n===== চূড়ান্ত ভিডিও: {vpath} =====")
+              if not os.path.isfile(vpath):
+                  print("  ভিডিও পাওয়া যায়নি")
+              else:
+                  r = subprocess.run(
+                      ["ffprobe", "-v", "error", "-show_entries",
+                       "stream=index,codec_type,codec_name,sample_rate,channels,duration",
+                       "-of", "default=nw=1", vpath],
+                      capture_output=True, text=True)
+                  print(r.stdout)
+                  # মার্জ করা অডিওর মোট দৈর্ঘ্য বনাম ভিডিওর অডিও দৈর্ঘ্য
+                  total = 0.0
+                  for f in glob.glob(f"{AUDIO_FOLDER}/{QARI}/{SURAH}/*.mp3"):
+                      p = probe(f)
+                      if p:
+                          total += p["dur"]
+                  print(f"  মার্জ করা অডিওর মোট দৈর্ঘ্য (000 সহ): {total:.1f}s")
+                  print("  (ভিডিওতে 000 এর ছবি না থাকলে ওই ফাইল বাদ যায়; দৈর্ঘ্যের বড় ফারাক থাকলে সন্দেহজনক)")
+
+          print("\n===== ফলাফল =====")
+          if problems:
+              for p in problems:
+                  print(" - " + p)
+              print("\nসিদ্ধান্ত: প্যারামিটার মেলেনি। ভিডিও স্ক্রিপ্টে '-ar 48000 -ac 2' যোগ করলে ঠিক হবে।")
+          else:
+              print("সব ফাইলের sample_rate ও channels একই। সমস্যা অন্য কারণে — ভিডিওর অডিও স্ট্রিম (check_video চালু করে) দেখুন।")
+
+          summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary:
+              with open(summary, "a", encoding="utf-8") as f:
+                  f.write(f"## Audio param check — {QARI}/{SURAH}\n\n")
+                  if problems:
+                      for p in problems:
+                          f.write(f"- ⚠️ {p}\n")
+                  else:
+                      f.write("- ✅ সব ফাইলের sample_rate ও channels একই\n")
+          PY
