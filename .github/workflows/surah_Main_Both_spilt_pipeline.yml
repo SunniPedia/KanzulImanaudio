@@ -631,7 +631,7 @@ jobs:
           # ইউটিউবের seekbar/কন্ট্রোল বার নিচের যে অংশ ঢেকে দেয় সেটা বাদ রেখে সূরার নাম (আরবি+বাংলা) বসবে।
           # ফুলস্ক্রিনে কন্ট্রোল বার + seekbar প্রায় ৬-৭% উচ্চতা নেয়; 35dp = 105px (~4.9%) রাখা।
           # বাড়াতে/কমাতে 55 বদলান (শুধু সূরার নামের জন্য)।
-          NAME_BOTTOM_MARGIN = int(20*SCALE)
+          NAME_BOTTOM_MARGIN = int(30*SCALE)
           # সবচেয়ে খারাপ অবস্থা ধরে (আয়াত লাইন আছে) বাংলা নামের শুরুর y — যাতে সব আয়াতের ছবিতে ফন্ট একই থাকে
           _f_ar_blk = get_font_by_size(True, BASE_DETAILS_AR*SCALE)
           AR_NAME_BLOCK_H = _dummy_draw.textbbox((0,0), AR_NAME, font=_f_ar_blk)[3] + int(12*SCALE)   # আরবি নামের আসল নিচ + ছোট ফাঁকা
