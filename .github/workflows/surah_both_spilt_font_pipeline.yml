@@ -1,4 +1,4 @@
-name: All in one Full with spilt Pipeline - Download → Merge → Tags → Thumbnail → 4K Video
+name: All Surah Full with spilt Pipeline - Download → Merge → Tags → Thumbnail → 4K Video
 
 # =====================================================================
 # ফোল্ডার স্ট্রাকচার (ক্বারী ও সূরা অনুযায়ী আলাদা):
@@ -579,6 +579,9 @@ jobs:
           CANVAS_H = 2160
           FIT_TOP = int(50*SCALE)       # লেখার ব্লকের উপরের ন্যূনতম ফাঁকা
           FIT_BOTTOM = int(40*SCALE)    # নিচের ন্যূনতম ফাঁকা
+          # "আয়াত" লাইনের বিভাজক রেখার নিচ থেকে সূরার নাম (আরবি+বাংলা) শুরু হওয়া পর্যন্ত দূরত্ব।
+          # আগে ছিল 55dp; কমালে নামগুলো উপরে উঠবে => নিচে বেশি জায়গা => বাংলা নামের ফন্ট বড় থাকবে।
+          NAMES_GAP = int(25*SCALE)
           MIN_K = 0.5                   # ফন্ট সর্বোচ্চ কতটা ছোট হতে পারবে (৫০%)
 
           # ---- আলাদা আলাদা shrink logic ----
@@ -614,9 +617,12 @@ jobs:
               return lines or [name]
 
           # নিচের ন্যূনতম ফাঁকা: ২dp (SCALE গুণ করে px)
-          NAME_BOTTOM_MARGIN = int(15*SCALE)
+          # ইউটিউবের seekbar/কন্ট্রোল বার নিচের যে অংশ ঢেকে দেয় সেটা বাদ রেখে সূরার নাম (আরবি+বাংলা) বসবে।
+          # ফুলস্ক্রিনে কন্ট্রোল বার + seekbar প্রায় ৬-৭% উচ্চতা নেয়; 55dp = 165px (~7.6%) অনুমান করে রাখা।
+          # বাড়াতে/কমাতে 55 বদলান (শুধু সূরার নামের জন্য)।
+          NAME_BOTTOM_MARGIN = int(55*SCALE)
           # সবচেয়ে খারাপ অবস্থা ধরে (আয়াত লাইন আছে) বাংলা নামের শুরুর y — যাতে সব আয়াতের ছবিতে ফন্ট একই থাকে
-          WORST_NAMES_Y = LINE_Y + int(55*SCALE)
+          WORST_NAMES_Y = LINE_Y + NAMES_GAP
           WORST_BN_Y = WORST_NAMES_Y + int(BASE_DETAILS_AR*SCALE*1.6) + GAP_Y_DETAILS
 
           temp_BN = 70
@@ -855,7 +861,7 @@ jobs:
               ayat_disp=to_bangla_num(disp(ayat_int))
               show_ayat = ayat_int!= 0
               line_y = LINE_Y if show_ayat else LINE_Y_NO_AYAT
-              names_y = line_y + int(55*SCALE)
+              names_y = line_y + NAMES_GAP
 
               f_sura=get_font(False, BASE_SURA)
               max_w=W-LEFT_W-int(140*SCALE)
