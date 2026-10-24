@@ -614,7 +614,7 @@ jobs:
               return lines or [name]
 
           # নিচের ন্যূনতম ফাঁকা: ২dp (SCALE গুণ করে px)
-          NAME_BOTTOM_MARGIN = int(2*SCALE)
+          NAME_BOTTOM_MARGIN = int(5*SCALE)
           # সবচেয়ে খারাপ অবস্থা ধরে (আয়াত লাইন আছে) বাংলা নামের শুরুর y — যাতে সব আয়াতের ছবিতে ফন্ট একই থাকে
           WORST_NAMES_Y = LINE_Y + int(55*SCALE)
           WORST_BN_Y = WORST_NAMES_Y + int(BASE_DETAILS_AR*SCALE*1.6) + GAP_Y_DETAILS
