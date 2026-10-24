@@ -1,4 +1,4 @@
-name: All in one Surah Full with spilt Pipeline - Download → Merge → Tags → Thumbnail → 4K Video
+name: All Surah Full with spilt Pipeline - Download → Merge → Tags → Thumbnail → 4K Video
 
 # =====================================================================
 # ফোল্ডার স্ট্রাকচার (ক্বারী ও সূরা অনুযায়ী আলাদা):
@@ -613,15 +613,27 @@ jobs:
               if cur: lines.append(cur)
               return lines or [name]
 
-          temp_BN = 72
+          # নিচের ন্যূনতম ফাঁকা: ২dp (SCALE গুণ করে px)
+          NAME_BOTTOM_MARGIN = int(2*SCALE)
+          # সবচেয়ে খারাপ অবস্থা ধরে (আয়াত লাইন আছে) বাংলা নামের শুরুর y — যাতে সব আয়াতের ছবিতে ফন্ট একই থাকে
+          WORST_NAMES_Y = LINE_Y + int(55*SCALE)
+          WORST_BN_Y = WORST_NAMES_Y + int(BASE_DETAILS_AR*SCALE*1.6) + GAP_Y_DETAILS
+
+          temp_BN = 70
           BASE_DETAILS_BN = 68
           BN_NAME_LINES = [BN_NAME]
           while True:
               f_bn_det=get_font_by_size(False, temp_BN*SCALE)
               BN_NAME_LINES = wrap_name_lines(BN_NAME, f_bn_det, AVAIL_W_NAMES)
               widest = max(_dummy_draw.textlength(l, font=f_bn_det) for l in BN_NAME_LINES)
-              if widest <= AVAIL_W_NAMES or temp_BN <= DETAILS_FLOOR:
+              lh = int(temp_BN*SCALE*1.35)
+              last_bottom = WORST_BN_Y + (len(BN_NAME_LINES)-1)*lh + _dummy_draw.textbbox((0,0), BN_NAME_LINES[-1], font=f_bn_det)[3]
+              fits_w = widest <= AVAIL_W_NAMES
+              fits_h = last_bottom <= CANVAS_H - NAME_BOTTOM_MARGIN
+              if (fits_w and fits_h) or temp_BN <= DETAILS_FLOOR:
                   BASE_DETAILS_BN=temp_BN
+                  if not (fits_w and fits_h):
+                      print(f"[WARN] বাংলা নাম সর্বনিম্ন ফন্টেও পুরো ঢুকছে না (চওড়া ok={fits_w}, উচ্চতা ok={fits_h})")
                   break
               temp_BN -= 2
 
