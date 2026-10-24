@@ -1,0 +1,2067 @@
+name: All Surah Full with spilt Pipeline - Download → Merge → Tags → Thumbnail → 4K Video
+
+# =====================================================================
+# ফোল্ডার স্ট্রাকচার (ক্বারী ও সূরা অনুযায়ী আলাদা):
+#   Audio/<qari>/001/001.mp3               ← ধাপ ১: আরবি আয়াতের অডিও (audio_source: everyayah / dawateislami; ফোল্ডারের নাম qari_folder ইনপুট, যেমন: alafasy)
+#   Audio/bangla/001/001.mp3               ← বাংলা অনুবাদের অডিও (সব ক্বারীর জন্য একই, আগে থেকে রিপোতে থাকতে হবে)
+#   rizwanaudio/<qari>/001/001.mp3         ← ধাপ ২/৩: মার্জ করা অডিও + ট্যাগ (audio_folder ইনপুটই এর রুট)
+#   rizwanSurahVideo/<qari>/001.mp4        ← ধাপ ৬: সূরার 4K ভিডিও
+#   thumbnail/1.png, output/001001.jpg     ← আগের মতোই (বদলায়নি)
+# পুরনো স্ট্রাকচারের ফাইল থাকলে আগে migrate_folder_structure.yml চালিয়ে নিন।
+#
+# চালানোর ধরন (audio_source ইনপুট):
+#   both         → দুই সোর্সের জন্য দুটো আলাদা job সমান্তরালে চলে (দুই ডাউনলোড, দুই মার্জ, দুই আলাদা ভিডিও + Release)
+#   everyayah    → শুধু everyayah (Audio/alafasy/...)
+#   dawateislami → শুধু dawateislami (Audio/dawateislami/...)
+# থাম্বনেইল ও আয়াতের ছবি একবারই বানানো হয় (prepare job), দুই সোর্সের ভিডিওতে একই ছবি ব্যবহার হয়।
+# run_download / run_merge / ... ফ্ল্যাগগুলো দুই সোর্সের জন্যই প্রযোজ্য।
+#
+# বড় আয়াত ভেঙে দেখানো (split_ayahs ইনপুট):
+#   split_ayahs = 31        → ওই সূরার ৩১ নম্বর আয়াত ভাঙবে (31,32 বা 31-33 ও চলবে; ফাঁকা = কিছুই ভাঙবে না)
+#   ভাঙা আয়াতের ভিডিও দুই ভাগে:
+#     ভাগ ১ → শুধু আরবি আয়াত (আরবি অডিও যতক্ষণ বাজে ততক্ষণ; ফন্ট/ফিট লজিক আগের মতোই)
+#     ভাগ ২ → "কানযুল ঈমান থেকে অনুবাদ:" লেবেল সহ শুধু বাংলা (বাংলা অডিওর সময়; টাইপরাইটার আগের মতোই)
+#   তালিকায় না থাকা আয়াত আগের মতোই (আরবি + বাংলা একসাথে) থাকবে।
+# =====================================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      # ---------- সবগুলো ধাপে ব্যবহৃত কমন ভ্যালু (একবারই দিতে হবে) ----------
+      surah_number:
+        description: 'সূরার নম্বর (1-114) — যেমন: 1 বা 001 বা ১ (সব ধাপে এটাই ব্যবহার হবে)'
+        required: true
+        default: '1'
+        type: string
+      arabic_name:
+        description: 'আরবি সূরার নাম — যেমন: سورة الفاتحة (থাম্বনেইল + ভিডিও দুটোতেই ব্যবহার হবে)'
+        required: true
+        type: string
+      bangla_name:
+        description: 'বাংলা সূরার নাম — যেমন: সূরা আল-ফাতিহা (থাম্বনেইল + ভিডিও দুটোতেই ব্যবহার হবে)'
+        required: true
+        type: string
+
+      # ---------- ধাপ ১: ডাউনলোড ----------
+      qari:
+        description: 'Qari source folder name (everyayah.com থেকে ডাউনলোডের জন্য, যেমন: Alafasy_128kbps)'
+        required: false
+        default: 'Alafasy_128kbps'
+        type: string
+      audio_source:
+        description: 'কোন সোর্স থেকে আরবি অডিও: both = দুটোই একসাথে (সমান্তরালে, আলাদা আলাদা ভিডিও) , everyayah = শুধু everyayah.com , dawateislami = শুধু data2.dawateislami.net'
+        required: false
+        default: 'both'
+        type: choice
+        options:
+          - both
+          - everyayah
+          - dawateislami
+      qari_folder:
+        description: 'everyayah এর ফোল্ডারের নাম (ফাঁকা = alafasy) — Audio/<নাম>/001/001.mp3, rizwanaudio/<নাম>/..., rizwanSurahVideo/<নাম>/...'
+        required: false
+        default: ''
+        type: string
+      dawateislami_folder:
+        description: 'dawateislami এর ফোল্ডারের নাম (ফাঁকা = dawateislami)'
+        required: false
+        default: ''
+        type: string
+      dawateislami_code:
+        description: 'শুধু dawateislami এর জন্য: ফাইলের নামে A এর পরের ২ অঙ্ক (যেমন A01001001 এর 01)'
+        required: false
+        default: '01'
+        type: string
+
+      # ---------- ধাপ ৩: MP3 ট্যাগ ----------
+      metadata_value:
+        description: 'MP3 এর নতুন Tag (Title/Artist/Album ইত্যাদি)'
+        required: false
+        default: 'Rizwan'
+        type: string
+
+      # ---------- ধাপ ৪/৫: ছবি ও ভিডিও ----------
+      image_folder:
+        description: 'Image folder (আয়াতের ছবি এখানে যায়, ভিডিও এখান থেকে পড়ে)'
+        required: false
+        default: 'output'
+        type: string
+      audio_folder:
+        description: 'Audio folder (মার্জ করা অডিওর রুট; ভেতরে <qari>/<সূরা>/<আয়াত>.mp3 হিসেবে থাকে)'
+        required: false
+        default: 'rizwanaudio'
+        type: string
+      typing_speed:
+        description: 'বাংলা অনুবাদ টাইপরাইটারের গতি (প্রতি সেকেন্ডে কয়টি অক্ষর, যেমন: 18)'
+        required: false
+        default: '18'
+        type: string
+      transition_seconds:
+        description: 'আয়াত বদলের এনিমেশনের সময় (সেকেন্ডে, যেমন: 0.5। 0 দিলে এনিমেশন বন্ধ)'
+        required: false
+        default: '0.5'
+        type: string
+      split_ayahs:
+        description: 'বড় আয়াত ভেঙে দেখানো: যে আয়াত নম্বরগুলো ভাঙবেন কমা দিয়ে লিখুন — যেমন: 31 বা 31,32 বা 31-33 (বাংলা সংখ্যাও চলবে)। এই আয়াতে আগে শুধু আরবি (আরবি অডিওর দৈর্ঘ্য পর্যন্ত), তারপর "কানযুল ঈমান থেকে অনুবাদ:" সহ শুধু বাংলা (বাকি অডিও) দেখাবে। ফাঁকা = কোনো আয়াত ভাঙবে না, সব আয়াত আগের মতোই'
+        required: false
+        default: ''
+        type: string
+      commit_result:
+        description: 'থাম্বনেইল রিপোজিটরিতে কমিট করবেন?'
+        required: false
+        default: true
+        type: boolean
+
+      # ---------- কোন কোন ধাপ চালাবে (ইচ্ছা করলে বন্ধ করা যাবে) ----------
+      run_download:
+        description: 'ধাপ ১: Surah অডিও ডাউনলোড'
+        required: false
+        default: true
+        type: boolean
+      run_merge:
+        description: 'ধাপ ২: Arabic + Bangla অডিও মার্জ'
+        required: false
+        default: true
+        type: boolean
+      run_tags:
+        description: 'ধাপ ৩: MP3 Tag ঠিক করা'
+        required: false
+        default: true
+        type: boolean
+      run_thumbnail:
+        description: 'ধাপ ৪: থাম্বনেইল তৈরি'
+        required: false
+        default: true
+        type: boolean
+      run_video:
+        description: 'ধাপ ৫: আয়াত ছবি + 4K এনিমেটেড ভিডিও'
+        required: false
+        default: true
+        type: boolean
+      run_hd:
+        description: 'ধাপ ৬ক: 4K ভিডিও থেকে HD (1920x1080) কপি বানানো (HD ফোল্ডারে commit হবে না)'
+        required: false
+        default: true
+        type: boolean
+      run_release:
+        description: 'ধাপ ৬খ: সূরার তথ্যসহ GitHub Release তৈরি (4K + HD ফাইল সংযুক্ত)'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  # =====================================================================
+  # Job ১: prepare — থাম্বনেইল + আয়াতের ছবি + এনিমেশন লেয়ার (একবারই বানানো হয়)
+  #        দুই সোর্সের (everyayah / dawateislami) ভিডিওতে একই ছবি ও থাম্বনেইল ব্যবহার হয়
+  # =====================================================================
+  prepare:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      sources: ${{ steps.src.outputs.sources }}
+
+    steps:
+      # =====================================================================
+      # ধাপ ০: প্রস্তুতি (Checkout + ইনপুট নরমালাইজ + টুলস ইনস্টল)
+      # =====================================================================
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+
+      - name: Step 0 - Normalize Surah Number (বাংলা/ইংরেজি/001 সব ফরম্যাট সামলাবে)
+        env:
+          SURAH_INPUT: ${{ inputs.surah_number }}
+          QARI_FOLDER: ${{ inputs.qari_folder }}
+          DAWAT_FOLDER: ${{ inputs.dawateislami_folder }}
+          AUDIO_SOURCE: everyayah     # prepare job এ শুধু সূরার নম্বর দরকার; আসল সোর্স নিচের pipeline job এ matrix থেকে আসে
+          QARI_INPUT: ${{ inputs.qari }}
+          DAWAT_CODE: ${{ inputs.dawateislami_code }}
+        run: |
+          python3 << 'PY'
+          import os, re, sys
+
+          raw = os.environ.get("SURAH_INPUT", "").strip()
+          # বাংলা সংখ্যা থাকলে ইংরেজিতে রূপান্তর
+          raw = raw.translate(str.maketrans("০১২৩৪৫৬৭৮৯", "0123456789"))
+          digits = re.sub(r"\D", "", raw)
+
+          if not digits:
+              print("Error: সূরার নম্বর দিতে হবে (শুধু সংখ্যা)")
+              sys.exit(1)
+
+          num = int(digits)
+          if num < 1 or num > 114:
+              print("Error: Surah number must be between 1 and 114")
+              sys.exit(1)
+
+          pad = f"{num:03d}"
+          print(f"Surah number -> {num} (3-digit: {pad})")
+
+          # ক্বারীর ফোল্ডারের নাম: Audio/<qari>/001/001.mp3, rizwanaudio/<qari>/001/001.mp3, rizwanSurahVideo/<qari>/001.mp4
+          # অডিওর সোর্স: everyayah (qari ইনপুট অনুযায়ী) অথবা dawateislami
+          source = os.environ.get("AUDIO_SOURCE", "everyayah").strip() or "everyayah"
+          if source not in ("everyayah", "dawateislami"):
+              print("Error: audio_source শুধু everyayah বা dawateislami হতে পারে")
+              sys.exit(1)
+          dawat_code = os.environ.get("DAWAT_CODE", "01").strip()
+          if source == "dawateislami" and not re.fullmatch(r"\d{2}", dawat_code):
+              print("Error: dawateislami_code ঠিক ২ অঙ্কের সংখ্যা হতে হবে (যেমন: 01)")
+              sys.exit(1)
+          # ফোল্ডারের নাম ফাঁকা থাকলে অটো: everyayah -> alafasy, dawateislami -> dawateislami
+          folder_in = os.environ.get("DAWAT_FOLDER", "") if source == "dawateislami" else os.environ.get("QARI_FOLDER", "")
+          qari_dir = folder_in.strip().strip("/") or ("dawateislami" if source == "dawateislami" else "alafasy")
+          # Release / commit এ দেখানোর ক্বারীর নাম
+          qari_label = "Dawateislami" if source == "dawateislami" else re.sub(r"[^A-Za-z0-9._ -]", "", os.environ.get("QARI_INPUT", "").strip())
+          if not re.fullmatch(r"[A-Za-z0-9._-]+", qari_dir) or qari_dir in (".", ".."):
+              print("Error: ক্বারী ফোল্ডারের নামে শুধু ইংরেজি অক্ষর, সংখ্যা, '.', '_' ও '-' চলবে (যেমন: alafasy)")
+              sys.exit(1)
+          print(f"Audio source -> {source} | Qari folder -> {qari_dir} | label -> {qari_label}")
+
+          # 114 টা সূরার আয়াত সংখ্যা (Release এর তথ্যের জন্য)
+          AYAH_COUNTS = [0, 7, 286, 200, 176, 120, 165, 206, 75, 129, 109, 123, 111, 43, 52, 99, 128, 111, 110, 98, 135, 112, 78, 118, 64, 77, 227, 93, 88, 69, 60, 34, 30, 73, 54, 45, 83, 182, 88, 75, 85, 54, 53, 89, 59, 37, 35, 38, 29, 18, 45, 60, 49, 62, 55, 78, 96, 29, 22, 24, 13, 14, 11, 11, 18, 12, 12, 30, 52, 52, 44, 28, 28, 20, 56, 40, 31, 50, 40, 46, 42, 29, 19, 36, 25, 22, 17, 19, 26, 30, 20, 15, 21, 11, 8, 8, 19, 5, 8, 8, 11, 11, 8, 3, 9, 5, 4, 7, 3, 6, 3, 5, 4, 5, 6]
+          ayah_count = AYAH_COUNTS[num]
+          to_bn = str.maketrans("0123456789", "০১২৩৪৫৬৭৮৯")
+
+          with open(os.environ["GITHUB_ENV"], "a") as f:
+              f.write(f"AUDIO_SOURCE={source}\n")      # everyayah / dawateislami
+              f.write(f"QARI_LABEL={qari_label}\n")        # Release ও commit এ দেখানোর নাম
+              f.write(f"DAWAT_CODE={dawat_code}\n")         # dawateislami ফাইলের নামের ২ অঙ্কের কোড
+              f.write(f"QARI_DIR={qari_dir}\n")     # যেমন: alafasy (Audio, rizwanaudio, rizwanSurahVideo এর ক্বারী ফোল্ডার)
+              f.write(f"SURAH_NUM={num}\n")     # যেমন: 1   (ডাউনলোড + থাম্বনেইলের ফাইলের নাম)
+              f.write(f"SURAH_PAD={pad}\n")     # যেমন: 001 (মার্জ, ট্যাগ, ছবি, ভিডিও)
+              f.write(f"AYAH_COUNT={ayah_count}\n")                        # যেমন: 7
+              f.write(f"SURAH_NUM_BN={str(num).translate(to_bn)}\n")        # যেমন: ১
+              f.write(f"AYAH_COUNT_BN={str(ayah_count).translate(to_bn)}\n")  # যেমন: ৭
+          PY
+
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+
+      - name: Install Python packages (Pillow, mutagen)
+        run: |
+          pip install Pillow mutagen
+
+
+      - name: Install Playwright + Chromium
+        if: ${{ inputs.run_thumbnail }}
+        run: |
+          pip install playwright
+          playwright install --with-deps chromium
+
+      # =====================================================================
+      # কোন কোন সোর্স চলবে (audio_source: both / everyayah / dawateislami) → matrix এর তালিকা
+      # =====================================================================
+      - name: Decide audio sources (both / everyayah / dawateislami)
+        id: src
+        env:
+          AUDIO_SOURCE: ${{ inputs.audio_source }}
+        run: |
+          case "$AUDIO_SOURCE" in
+            everyayah)    echo 'sources=["everyayah"]' >> "$GITHUB_OUTPUT" ;;
+            dawateislami) echo 'sources=["dawateislami"]' >> "$GITHUB_OUTPUT" ;;
+            *)            echo 'sources=["everyayah","dawateislami"]' >> "$GITHUB_OUTPUT" ;;
+          esac
+          cat "$GITHUB_OUTPUT"
+
+
+      # =====================================================================
+      # ধাপ ৪: সূরা থাম্বনেইল তৈরি (সূরা নম্বর ইংরেজি থাকলেও বাংলায় রূপান্তর হবে)
+      # =====================================================================
+      - name: Step 4 - Generate thumbnail
+        if: ${{ inputs.run_thumbnail }}
+        env:
+          SURAH_AR: ${{ inputs.arabic_name }}
+          SURAH_BN: ${{ inputs.bangla_name }}
+          SURAH_NO: ${{ env.SURAH_NUM }}
+        run: |
+          python - <<'PY'
+          import os, re, html, pathlib, base64, mimetypes
+          from playwright.sync_api import sync_playwright
+
+          ROOT = pathlib.Path.cwd()
+          SRC = ROOT / "src"
+          TO_BN = str.maketrans("0123456789", "০১২৩৪৫৬৭৮৯")
+          TO_EN = str.maketrans("০১২৩৪৫৬৭৮৯", "0123456789")
+
+          TEMPLATE = """<!doctype html>
+          <html lang="bn"><head><meta charset="utf-8">
+          <style>
+          @font-face { font-family:'Noor';  src:url('file://__SRC__/noorehuda.ttf'); }
+          @font-face { font-family:'Solai'; src:url('file://__SRC__/solaimanlipi.ttf'); }
+          :root{ --green:#0b5d3b; --green-d:#073d27; --gold:#b8892f; --gold-l:#e2bf6a; --ink:#1b2a41; }
+          *{ margin:0; padding:0; box-sizing:border-box; }
+          html,body{ width:1920px; height:1080px; overflow:hidden; }
+          body{
+            background:url('file://__SRC__/background.jpg') center/cover no-repeat;
+            position:relative; font-family:'Solai',sans-serif; color:var(--ink);
+          }
+          /* ফ্রেম */
+          .frame{ position:absolute; inset:34px; border:3px solid var(--gold); border-radius:6px; }
+          .frame::after{ content:''; position:absolute; inset:10px; border:1px solid rgba(184,137,47,.55); border-radius:3px; }
+
+          /* বাম: লোগো */
+          .left{ position:absolute; left:90px; top:0; bottom:0; width:560px;
+            display:flex; flex-direction:column; align-items:center; justify-content:center; }
+          .logo-wrap{ width:500px; height:500px; border-radius:36px; background:#fff;
+            border:6px solid var(--gold); box-shadow:0 18px 50px rgba(11,93,59,.22), inset 0 0 0 10px #fff;
+            display:flex; align-items:center; justify-content:center; overflow:hidden; }
+          .logo-wrap img{ width:100%; height:100%; object-fit:contain; }
+
+          /* ডিভাইডার */
+          .divider{ position:absolute; left:720px; top:150px; bottom:150px; width:3px;
+            background:linear-gradient(transparent,var(--gold) 20%,var(--gold) 80%,transparent); }
+
+          /* ডান: লেখা (ফ্রেম থেকে নিরাপদ দূরত্ব রেখে) */
+          .right{ position:absolute; left:790px; right:90px; top:92px; bottom:112px;
+            display:flex; flex-direction:column; align-items:center; justify-content:space-between; text-align:center; }
+
+          /* ক্যালিগ্রাফি মেডালিয়ন (PNG স্বচ্ছ ব্যাকগ্রাউন্ড) */
+          .medal{ width:280px; height:280px; overflow:hidden; display:flex; align-items:center; justify-content:center; }
+          .medal img{ width:350px; height:350px; flex:none; }
+          .quran-bn{ font-size:56px; line-height:1.2; color:var(--gold); letter-spacing:2px; margin-top:22px; }
+          .ornament{ width:520px; height:3px; flex:none;
+            background:linear-gradient(90deg,transparent,var(--gold),transparent); position:relative; }
+          .ornament::after{ content:'✦'; position:absolute; left:50%; top:50%; transform:translate(-50%,-52%);
+            color:var(--gold); font-size:30px; padding:0 14px; background:#eef1fa; }
+
+          .card{ width:100%; padding:14px 30px 28px; border-radius:26px;
+            background:linear-gradient(135deg,var(--green),var(--green-d));
+            box-shadow:0 14px 40px rgba(7,61,39,.35); border:3px solid var(--gold); position:relative; }
+          .num{ position:absolute; top:-40px; right:36px; width:84px; height:84px; border-radius:50%;
+            background:var(--gold); color:#fff; font-size:40px; display:__NUMDISP__;
+            align-items:center; justify-content:center; border:5px solid #fff; box-shadow:0 6px 16px rgba(0,0,0,.25); }
+          .s-ar{ font-family:'Noor'; font-size:130px; line-height:1.5; color:#fff; direction:rtl; }
+          .s-bn{ font-size:80px; line-height:1.2; color:var(--gold-l); margin-top:-4px; }
+          .tarjuma{ display:inline-block; padding:12px 48px 16px; border-radius:60px; line-height:1.3;
+            font-size:50px; color:var(--green-d); background:linear-gradient(90deg,#f3dc9c,#e2bf6a,#f3dc9c);
+            border:2px solid var(--gold); box-shadow:0 6px 16px rgba(184,137,47,.35); }
+          </style></head>
+          <body>
+            <div class="frame"></div>
+            <div class="left">
+              <div class="logo-wrap"><img src="file://__SRC__/logo.jpg"></div>
+            </div>
+            <div class="divider"></div>
+            <div class="right">
+              <div>
+                <div class="medal"><img id="calli" src="__CALLI__"></div>
+                <div class="quran-bn">আল কুরআন</div>
+              </div>
+              <div class="ornament"></div>
+              <div class="card">
+                <div class="num">__NUM__</div>
+                <div class="s-ar">__AR__</div>
+                <div class="s-bn">__BN__</div>
+              </div>
+              <div class="tarjuma">তরজুমায়ে কানযুল ঈমান</div>
+            </div>
+          </body></html>"""
+
+          # calligraphy ছবি খোঁজা: ছোট/বড় হাতের অক্ষর বা এক্সটেনশন (png/jpg/webp) যাই হোক, পাওয়া যাবে
+          print("src/ ফোল্ডারে আছে:", sorted(p.name for p in SRC.glob("*")) if SRC.exists() else "src ফোল্ডারই নেই!")
+          found = [p for p in SRC.glob("*") if p.stem.lower() == "calligraphy"] if SRC.exists() else []
+          if not found:
+              raise SystemExit("ERROR: src/ ফোল্ডারে calligraphy.png পাওয়া যায়নি। ফাইলটা রিপোতে commit+push করেছেন? নাম ঠিক calligraphy.png?")
+          cal = found[0]
+          mime = mimetypes.guess_type(cal.name)[0] or "image/png"
+          calli_uri = f"data:{mime};base64," + base64.b64encode(cal.read_bytes()).decode()
+          print("calligraphy ব্যবহার হচ্ছে:", cal.name, f"({cal.stat().st_size} bytes)")
+
+          ar = os.environ["SURAH_AR"]
+          bn = os.environ["SURAH_BN"]
+          # ইনপুটে বাংলা বা ইংরেজি যে সংখ্যাই থাকুক, আগে ইংরেজিতে নিয়ে তারপর বাংলায় রূপান্তর
+          no_en = re.sub(r"\D", "", os.environ["SURAH_NO"].translate(TO_EN))   # ফাইলের নামের জন্য ইংরেজি সংখ্যা
+          if not no_en:
+              raise SystemExit("সূরা নম্বর দিতে হবে (শুধু সংখ্যা)")
+          no_bn = no_en.translate(TO_BN)                                         # থাম্বনেইলে বাংলা সংখ্যা (ইংরেজি → বাংলা)
+          print(f"সূরা নম্বর: {no_en} -> থাম্বনেইলে দেখাবে: {no_bn}")
+
+          page_html = (TEMPLATE
+              .replace("__CALLI__", calli_uri)
+              .replace("__SRC__", SRC.as_posix())
+              .replace("__AR__", html.escape(ar))
+              .replace("__BN__", html.escape(bn))
+              .replace("__NUM__", no_bn)
+              .replace("__NUMDISP__", "flex"))
+
+          out = ROOT / "thumbnail" / f"{no_en}.png"
+          out.parent.mkdir(parents=True, exist_ok=True)
+          tmp = ROOT / "_thumb.html"
+          tmp.write_text(page_html, encoding="utf-8")
+
+          with sync_playwright() as pw:
+              b = pw.chromium.launch(args=["--allow-file-access-from-files"])
+              pg = b.new_page(viewport={"width": 1920, "height": 1080}, device_scale_factor=2)  # 3840x2160 (4K)
+              pg.goto(tmp.as_uri())
+              pg.evaluate("document.fonts.ready")
+              pg.wait_for_timeout(800)
+              if not pg.evaluate("document.getElementById('calli').naturalWidth > 0"):
+                  raise SystemExit("ERROR: calligraphy ছবি লোড হয়নি — ফাইলটি নষ্ট বা ভুল ফরম্যাটের হতে পারে")
+              pg.screenshot(path=str(out), type="png")
+              b.close()
+          tmp.unlink(missing_ok=True)
+
+          rel = out.relative_to(ROOT).as_posix()
+          print("saved:", rel)
+          if os.environ.get("GITHUB_ENV"):
+              with open(os.environ["GITHUB_ENV"], "a") as f:
+                  f.write(f"THUMB_FILE={rel}\n")
+          PY
+
+
+      - name: Step 4 - Upload thumbnail artifact
+        if: ${{ inputs.run_thumbnail }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: surah-thumbnail
+          path: ${{ env.THUMB_FILE }}
+
+
+      - name: Step 4 - Commit thumbnail
+        if: ${{ inputs.run_thumbnail && inputs.commit_result }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add thumbnail/
+          git diff --cached --quiet || git commit -m "chore: add thumbnail for surah $SURAH_NUM [skip ci]"
+          git pull --rebase origin ${{ github.ref_name }} || true
+          git push
+
+
+      # =====================================================================
+      # ধাপ ৫: আয়াতের ছবি (3840x2160) + এনিমেশন লেয়ার তৈরি
+      # =====================================================================
+      - name: Step 5 - Generate Fixed Images (3840x2160) + Animation Layers
+        if: ${{ inputs.run_video }}
+        env:
+          ARABIC_NAME: ${{ inputs.arabic_name }}
+          BANGLA_NAME: ${{ inputs.bangla_name }}
+          IMAGE_FOLDER: ${{ inputs.image_folder }}
+          SURAH_NUMBER: ${{ env.SURAH_PAD }}
+          SPLIT_AYAHS: ${{ inputs.split_ayahs }}
+        run: |
+          python3 << 'PY'
+          from PIL import Image, ImageDraw, ImageFont
+          import json, os, re, shutil, unicodedata
+
+          BG="src/background.jpg"
+          LOGO="src/logo.jpg"
+          DATA="src/data.json"
+          OUT=os.environ.get("IMAGE_FOLDER","output")
+          FONT_BN="src/solaimanlipi.ttf"
+          FONT_AR="src/noorehuda.ttf"
+
+          # ---- এনিমেশনের জন্য আলাদা লেয়ার এখানে জমা হয় (শুধু ভিডিওর জন্য, রিপোতে push হয় না) ----
+          ANIM="anim_layers"
+          SURAH_PREFIX=os.environ.get("SURAH_NUMBER","").strip()
+          # ---- যে আয়াতগুলো ভেঙে (আগে আরবি, পরে বাংলা) দেখানো হবে তার তালিকা (split_ayahs ইনপুট) ----
+          def parse_ayah_list(s):
+              s = (s or "").translate(str.maketrans("০১২৩৪৫৬৭৮৯", "0123456789"))
+              out = set()
+              for m in re.finditer(r"(\d+)\s*(?:-|–|—|to)\s*(\d+)|(\d+)", s):
+                  if m.group(3):
+                      out.add(int(m.group(3)))
+                  else:
+                      a, b = int(m.group(1)), int(m.group(2))
+                      if a > b:
+                          a, b = b, a
+                      out.update(range(a, b + 1))
+              return out
+
+          SPLIT_SET = parse_ayah_list(os.environ.get("SPLIT_AYAHS", ""))
+          print("Split ayahs (আরবি আগে, বাংলা পরে):", sorted(SPLIT_SET) if SPLIT_SET else "কিছু নেই — সব আয়াত আগের মতো")
+
+          def normalize_arabic_display(text):
+              return text.replace('\u0671', '\u0627')
+
+          AR_NAME=normalize_arabic_display(os.environ.get("ARABIC_NAME","").strip())
+          BN_NAME=os.environ.get("BANGLA_NAME","").strip()
+
+          if os.path.exists(OUT):
+              shutil.rmtree(OUT)
+          os.makedirs(OUT, exist_ok=True)
+
+          if os.path.exists(ANIM):
+              shutil.rmtree(ANIM)
+          os.makedirs(ANIM, exist_ok=True)
+
+          EN_TO_BN=str.maketrans("0123456789","০১২৩৪৫৬৭৮৯")
+          def to_bangla_num(s): return str(s).translate(EN_TO_BN)
+          def extract_number(s):
+              s=str(s).translate(str.maketrans("০১২৩৪৫৬৭৮৯","0123456789"))
+              m=re.search(r'\d+',s)
+              return int(m.group()) if m else 0
+          def clean_name(text):
+              text = re.sub(r'\s*\(\s*[0-9০-৯]+\s*\)', '', text)
+              return re.sub(r'\s{2,}', ' ', text).strip()
+
+          def has_arabic_letter(word):
+              # আয়াত-শেষের গোল নম্বর চিহ্ন (۝ + অঙ্ক, কখনো তার আগে waqf mark যেমন 'لا')
+              # এ কোনো মূল অক্ষর (letter) থাকে না — শুধু combining mark/digit/symbol থাকে।
+              # এই ফাংশন দিয়ে সেটা শনাক্ত করে আলাদা করা হয়।
+              return any(unicodedata.category(ch).startswith('L') for ch in word)
+
+          def merge_marker_tokens(words):
+              # স্পেস দিয়ে ভাঙা শব্দগুলোর মধ্যে যেগুলোতে কোনো আসল অক্ষর নেই (যেমন আয়াত নম্বরের
+              # গোল চিহ্ন/waqf mark), সেগুলো সবসময় আগের আসল শব্দের সাথে জোড়া লাগিয়ে দেওয়া হয়।
+              # ফলে wrap হওয়ার সময় এই চিহ্নটা কখনোই একা নতুন লাইনে পড়বে না (একা পড়লেই এর
+              # glyph shaping ভেঙে যায়/box আকারে দেখায়) — বরং শেষ শব্দের সাথেই এক টুকরো হয়ে
+              # যেকোনো লাইনে যাবে, ফলে শেপিং সবসময় ঠিক থাকবে।
+              merged=[]
+              for w in words:
+                  if merged and not has_arabic_letter(w):
+                      merged[-1] = merged[-1] + w
+                  else:
+                      merged.append(w)
+              return merged
+
+          # ---- Background: TARGET_W 3840 fixed ----
+          TARGET_W = 3840
+          if os.path.exists(BG):
+              _bg_raw = Image.open(BG).convert("RGB")
+          else:
+              _bg_raw = Image.new("RGB", (TARGET_W, 2160), (232,236,244))
+
+          if _bg_raw.width!= TARGET_W:
+              _resize_ratio = TARGET_W / _bg_raw.width
+              _new_h = round(_bg_raw.height * _resize_ratio)
+              orig_bg = _bg_raw.resize((TARGET_W, _new_h), Image.LANCZOS)
+              print(f"[INFO] background.jpg width {_bg_raw.width} → {TARGET_W} e normalize")
+          else:
+              orig_bg = _bg_raw
+
+          W = TARGET_W
+          BASE_W, BASE_H = orig_bg.size
+
+          def make_canvas(target_h):
+              if target_h <= BASE_H:
+                  return orig_bg.crop((0, 0, W, target_h))
+              canvas = Image.new("RGB", (W, target_h), (232,236,244))
+              canvas.paste(orig_bg, (0,0))
+              strip = orig_bg.crop((0, BASE_H-10, W, BASE_H))
+              canvas.paste(strip.resize((W, target_h - BASE_H), Image.LANCZOS), (0, BASE_H))
+              return canvas
+
+          LEFT_W=int(W*0.22)
+          SCALE=W/1280
+
+          def get_font_by_size(is_ar, px_size):
+              p=FONT_AR if is_ar else FONT_BN
+              try: return ImageFont.truetype(p, int(px_size))
+              except: return ImageFont.load_default()
+          def get_font(is_ar, dp):
+              return get_font_by_size(is_ar, dp*SCALE)
+
+          with open(DATA, encoding="utf-8") as f:
+              data=json.load(f)
+
+          BASE_SURA=40
+          BASE_KANZUL=42
+          BASE_BN=52
+          BASE_AR=80
+
+          SURA_Y=int(300*SCALE)
+          AYAT_Y=SURA_Y + int(BASE_SURA*SCALE*1.6)
+          LINE_Y=AYAT_Y + int(BASE_SURA*SCALE*1.6)
+          LINE_Y_NO_AYAT=SURA_Y + int(BASE_SURA*SCALE*1.6)
+          BOTTOM_MARGIN = int(5 * SCALE)
+          TOP_MARGIN = int(120*SCALE)
+
+          # ---- ফিক্সড 16:9 ফ্রেম: সব ছবি 3840x2160 ----
+          CANVAS_H = 2160
+          FIT_TOP = int(50*SCALE)       # লেখার ব্লকের উপরের ন্যূনতম ফাঁকা
+          FIT_BOTTOM = int(40*SCALE)    # নিচের ন্যূনতম ফাঁকা
+          MIN_K = 0.5                   # ফন্ট সর্বোচ্চ কতটা ছোট হতে পারবে (৫০%)
+
+          # ---- আলাদা আলাদা shrink logic ----
+          SIDE_MARGIN=int(30*SCALE)
+          AVAIL_W_NAMES = LEFT_W - 2*SIDE_MARGIN
+          DETAILS_FLOOR=32
+          GAP_Y_DETAILS=int(22*SCALE)
+          _dummy_draw=ImageDraw.Draw(Image.new("RGB",(10,10)))
+
+          # আরবি নামের জন্য আলাদা
+          temp_AR = 72
+          BASE_DETAILS_AR = 68
+          while True:
+              f_ar_det=get_font_by_size(True, temp_AR*SCALE)
+              AR_NAME_W=_dummy_draw.textlength(AR_NAME, font=f_ar_det)
+              if AR_NAME_W <= AVAIL_W_NAMES or temp_AR <= DETAILS_FLOOR:
+                  BASE_DETAILS_AR=temp_AR
+                  break
+              temp_AR -= 2
+
+          # বাংলা নামের জন্য আলাদা: আগে শব্দ ধরে একাধিক লাইনে ভাঙা হয় (ফন্ট বড় রেখেই),
+          # ভাঙার পরেও কোনো লাইন (যেমন একটা লম্বা শব্দ) জায়গায় না ঢুকলে তবেই ফন্ট ছোট হয়
+          def wrap_name_lines(name, font, max_w):
+              lines=[]; cur=""
+              for w in name.split():
+                  test=f"{cur} {w}".strip()
+                  if _dummy_draw.textlength(test, font=font) <= max_w:
+                      cur=test
+                  else:
+                      if cur: lines.append(cur)
+                      cur=w
+              if cur: lines.append(cur)
+              return lines or [name]
+
+          temp_BN = 72
+          BASE_DETAILS_BN = 68
+          BN_NAME_LINES = [BN_NAME]
+          while True:
+              f_bn_det=get_font_by_size(False, temp_BN*SCALE)
+              BN_NAME_LINES = wrap_name_lines(BN_NAME, f_bn_det, AVAIL_W_NAMES)
+              widest = max(_dummy_draw.textlength(l, font=f_bn_det) for l in BN_NAME_LINES)
+              if widest <= AVAIL_W_NAMES or temp_BN <= DETAILS_FLOOR:
+                  BASE_DETAILS_BN=temp_BN
+                  break
+              temp_BN -= 2
+
+          BN_NAME_LH = int(BASE_DETAILS_BN*SCALE*1.35)   # নামের লাইনগুলোর মাঝের দূরত্ব
+
+          def draw_bn_name_lines(drw, y, font):
+              # প্রতিটি লাইন সাইডবারের মাঝ বরাবর
+              for ln in BN_NAME_LINES:
+                  lw = drw.textlength(ln, font=font)
+                  drw.text(((LEFT_W - lw)//2, y), ln, font=font, fill=(20,20,60))
+                  y += BN_NAME_LH
+
+          print(f"Details font -> AR: {BASE_DETAILS_AR} (for {AR_NAME}), BN: {BASE_DETAILS_BN} (for {BN_NAME}) | BN lines: {BN_NAME_LINES}")
+
+          def disp(n):
+              if n == 0: return "0"
+              return f"0{n}" if n < 10 else str(n)
+
+          # colon glyph টা এই ফন্টে বেসলাইনের নিচের দিকে বসে, তাই একটু উপরে তুলে
+          # আলাদাভাবে আঁকা হয় যাতে এটা লেবেল/ভ্যালুর সাথে উলম্বভাবে মাঝ বরাবর দেখায়
+          COLON_LIFT_RATIO = 0.16
+
+          def _piece_widths(draw, label, colon_str, value, font):
+              label_w = draw.textlength(label, font=font)
+              colon_w = draw.textlength(colon_str, font=font)
+              value_w = draw.textlength(value, font=font) if value else 0
+              return label_w, colon_w, value_w
+
+          def draw_label_with_centered_colon(draw, x, y, label, value, font, fill, attach_colon=False):
+              """
+              attach_colon=False -> 'লেবেল : মান'  (স্পেস সহ, সূরা/আয়াত এর জন্য)
+              attach_colon=True  -> 'লেবেল: মান'   (লেবেলের সাথে লাগানো, অনুবাদ লেবেলের জন্য)
+              কোলনটা font size অনুযায়ী উপরে তুলে আঁকা হয়, যাতে মাঝ বরাবর দেখায়।
+              """
+              colon_str = ": " if (attach_colon and value) else (":" if attach_colon else " : " if value else " :")
+              label_w, colon_w, value_w = _piece_widths(draw, label, colon_str, value, font)
+              total_w = label_w + colon_w + value_w
+
+              lift = int(font.size * COLON_LIFT_RATIO)
+
+              draw.text((x, y), label, font=font, fill=fill)
+              draw.text((x + label_w, y - lift), colon_str, font=font, fill=fill)
+              if value:
+                  draw.text((x + label_w + colon_w, y), value, font=font, fill=fill)
+
+              return total_w
+
+          def draw_centered_label_colon(draw, y, label, value, font, fill):
+              colon_str = " : " if value else " :"
+              label_w, colon_w, value_w = _piece_widths(draw, label, colon_str, value, font)
+              total_w = label_w + colon_w + value_w
+              start_x = (LEFT_W - total_w)//2
+              draw_label_with_centered_colon(draw, start_x, y, label, value, font, fill, attach_colon=False)
+
+          def draw_label_colon(draw, x, y, label, value, font, fill):
+              # অনুবাদ লেবেলের কোলন সরাসরি লেবেলের সাথে লাগানো + মাঝ বরাবর তোলা
+              draw_label_with_centered_colon(draw, x, y, label, value, font, fill, attach_colon=True)
+
+          # ------------------------------------------------------------------
+          # বড় আয়াত ভাঙার ফাংশন: একই সাইডবার/ব্যাকগ্রাউন্ড (_base.jpg) এর ওপর বসানোর জন্য
+          #   ভাগ ক (sA): শুধু আরবি আয়াত            -> {stem}_sA.json + {stem}_sA_ar.png
+          #   ভাগ খ (sB): লেবেল + শুধু বাংলা অনুবাদ  -> {stem}_sB.json + {stem}_sB_lbl.png
+          # ফন্টের সাইজ/ফিট (k shrink) লজিক আগের মতোই; প্রতিটি অংশ আলাদাভাবে ফ্রেমের মাঝ বরাবর বসে।
+          # ------------------------------------------------------------------
+          def wrap_words_g(words, font, max_w):
+              lines=[]; cur=""
+              for w in words:
+                  test=f"{cur} {w}".strip()
+                  if _dummy_draw.textlength(test, font=font) <= max_w:
+                      cur=test
+                  else:
+                      if cur: lines.append(cur)
+                      cur=w
+              if cur: lines.append(cur)
+              return lines
+
+          def crop_layer(lay, pad=6):
+              bb = lay.getchannel("A").getbbox()
+              if bb:
+                  bb = (max(0,bb[0]-pad), max(0,bb[1]-pad), min(lay.width,bb[2]+pad), min(lay.height,bb[3]+pad))
+                  # শুরুর x/y জোড় সংখ্যা (YUV 4:2:0 এ রঙের প্রান্ত সরে না যাওয়ার জন্য)
+                  bb = (bb[0] - (bb[0] % 2), bb[1] - (bb[1] % 2), bb[2], bb[3])
+              else:
+                  bb = (0, 0, 2, 2)
+              return lay.crop(bb), bb
+
+          def make_split_layers(stem, ar_words, bn_words, max_w, sidebar):
+              H = CANVAS_H
+              PANE_X = LEFT_W
+              avail_h = CANVAS_H - FIT_TOP - FIT_BOTTOM
+              base_name = f"{stem}_sbase.jpg"
+
+              # ---------- আলাদা ব্যাকগ্রাউন্ড + সাইডবার (সবসময় ঠিক 3840x2160; সাইডবার আগের মতোই) ----------
+              # (স্বাভাবিক লেআউট বেশি লম্বা হয়ে ফ্রেম ছাড়িয়ে গেলেও split এ সমস্যা হয় না)
+              sb = make_canvas(H)
+              sd = ImageDraw.Draw(sb)
+              sd.rectangle([0,0,LEFT_W,H], fill=(214,218,228))
+              sd.line([(LEFT_W,0),(LEFT_W,H)], fill=(35,45,85), width=int(4*SCALE))
+              if os.path.exists(LOGO):
+                  try:
+                      ls=int(200*SCALE)
+                      logo=Image.open(LOGO).convert("RGBA").resize((ls,ls), Image.LANCZOS)
+                      sb.paste(logo,(int((LEFT_W-ls)//2), int(30*SCALE)), logo)
+                  except: pass
+              draw_centered_label_colon(sd, SURA_Y, "সূরা", sidebar["sura_disp"], sidebar["f_sura"], (0,0,0))
+              if sidebar["show_ayat"]:
+                  draw_centered_label_colon(sd, AYAT_Y, "আয়াত", sidebar["ayat_disp"], sidebar["f_sura"], (0,0,0))
+              sd.line([(int(40*SCALE), sidebar["line_y"]), (int(LEFT_W-40*SCALE), sidebar["line_y"])], fill=(100,100,120), width=2)
+              _f_ar_det=get_font_by_size(True, BASE_DETAILS_AR*SCALE)
+              _f_bn_det=get_font_by_size(False, BASE_DETAILS_BN*SCALE)
+              _ar_w = sd.textlength(AR_NAME, font=_f_ar_det)
+              sd.text(((LEFT_W - _ar_w)//2, sidebar["names_y"]), AR_NAME, font=_f_ar_det, fill=(20,20,60))
+              draw_bn_name_lines(sd, sidebar["names_y"] + int(BASE_DETAILS_AR*SCALE*1.6) + GAP_Y_DETAILS, _f_bn_det)
+              sb.save(os.path.join(ANIM, base_name), "JPEG", quality=95, subsampling=0)
+
+              # ---------- ভাগ ক: শুধু আরবি ----------
+              k = 1.0
+              while True:
+                  f_ar = get_font(True, BASE_AR*k)
+                  ar_lines = wrap_words_g(ar_words, f_ar, max_w)
+                  AR_LH = int(BASE_AR*k*SCALE*1.5)
+                  block_h = len(ar_lines)*AR_LH
+                  if block_h <= avail_h or k <= MIN_K:
+                      break
+                  k = round(k - 0.02, 2)
+              start_y = max(FIT_TOP, (H - block_h - BOTTOM_MARGIN)//2)
+              lay = Image.new("RGBA", (W-PANE_X, H), (0,0,0,0))
+              d = ImageDraw.Draw(lay)
+              y = start_y
+              for line in ar_lines:
+                  w = _dummy_draw.textlength(line, font=f_ar)
+                  ax = W - int(70*SCALE) - w
+                  d.text((ax-PANE_X, y), line, font=f_ar, fill=(0,0,0,255))
+                  y += AR_LH
+              crop, bb = crop_layer(lay)
+              crop.save(os.path.join(ANIM, f"{stem}_sA_ar.png"), compress_level=3)
+              metaA = {"animated": True, "base": base_name, "ar_png": f"{stem}_sA_ar.png",
+                       "ar_xy": [bb[0]+PANE_X, bb[1]]}
+              with open(os.path.join(ANIM, f"{stem}_sA.json"), "w", encoding="utf-8") as jf:
+                  json.dump(metaA, jf, ensure_ascii=False)
+              print(f"[SPLIT-A] {stem}: Arabic only | font scale {k} | lines={len(ar_lines)}")
+
+              # ---------- ভাগ খ: "কানযুল ঈমান থেকে অনুবাদ:" + শুধু বাংলা ----------
+              k = 1.0
+              while True:
+                  f_bn = get_font(False, BASE_BN*k)
+                  f_kanzul = get_font(False, BASE_KANZUL*k)
+                  bn_lines = wrap_words_g(bn_words, f_bn, max_w)
+                  BN_LH = int(BASE_BN*k*SCALE*1.4)
+                  GAP2 = int(75*SCALE*k)
+                  block_h = GAP2 + len(bn_lines)*BN_LH
+                  if block_h <= avail_h or k <= MIN_K:
+                      break
+                  k = round(k - 0.02, 2)
+              start_y = max(FIT_TOP, (H - block_h - BOTTOM_MARGIN)//2)
+              lay = Image.new("RGBA", (W-PANE_X, H), (20,40,120,0))
+              d = ImageDraw.Draw(lay)
+              KZ_X = LEFT_W + int(50*SCALE)
+              y = start_y
+              draw_label_colon(d, KZ_X-PANE_X, y, "কানযুল ঈমান থেকে অনুবাদ", "", f_kanzul, (20,40,120,255))
+              y += GAP2
+              crop, bb = crop_layer(lay)
+              crop.save(os.path.join(ANIM, f"{stem}_sB_lbl.png"), compress_level=3)
+
+              # বাংলা লাইন ও প্রতিটি শব্দের অবস্থান (টাইপরাইটারের জন্য; justify লজিক আগের মতোই)
+              bn_y0 = y
+              bn_json_lines = []
+              for i, line in enumerate(bn_lines):
+                  words = line.split()
+                  is_last = i == len(bn_lines)-1
+                  segs = None
+                  if not is_last and len(words) > 1:
+                      base_w = sum(_dummy_draw.textlength(w, font=f_bn) for w in words) + _dummy_draw.textlength(" ", font=f_bn)*(len(words)-1)
+                      extra = max_w - base_w
+                      gap = extra/(len(words)-1)
+                      if 0 < gap < 70*SCALE:
+                          tx = LEFT_W + int(50*SCALE)
+                          segs = []
+                          for w in words:
+                              segs.append({"text": w, "x": tx})
+                              tx += _dummy_draw.textlength(w, font=f_bn) + _dummy_draw.textlength(" ", font=f_bn) + gap
+                  if segs is None:
+                      segs = [{"text": line, "x": LEFT_W+int(50*SCALE)}]
+                  bn_json_lines.append({"y": y, "segs": segs})
+                  y += BN_LH
+
+              rx0 = LEFT_W + int(20*SCALE)
+              rx1 = W - int(20*SCALE)
+              ry0 = max(0, int(bn_y0 - 0.30*BN_LH))
+              ry1 = min(H, int(y + 0.30*BN_LH))
+              ry0 -= ry0 % 2
+              ry1 -= ry1 % 2
+              rx0 -= rx0 % 2
+              rx1 -= rx1 % 2
+              metaB = {
+                  "animated": True,
+                  "base": base_name,
+                  "ar_png": f"{stem}_sB_lbl.png",      # এখানে ‘ar_png’ = স্থির লেয়ার (লেবেল); আরবির মতোই ফেড/স্লাইড করে
+                  "ar_xy": [bb[0]+PANE_X, bb[1]],
+                  "bn": {
+                      "font": FONT_BN,
+                      "font_px": int(BASE_BN*k*SCALE),
+                      "color": [15,25,85],
+                      "region": [rx0, ry0, rx1, ry1],
+                      "lines": bn_json_lines,
+                  },
+              }
+              with open(os.path.join(ANIM, f"{stem}_sB.json"), "w", encoding="utf-8") as jf:
+                  json.dump(metaB, jf, ensure_ascii=False)
+              print(f"[SPLIT-B] {stem}: Bangla only | font scale {k} | lines={len(bn_lines)}")
+          for item in data:
+              sura_int=extract_number(item.get('sura','0'))
+              ayat_int=extract_number(item.get('verses','0'))
+              filename=f"{sura_int:03d}{ayat_int:03d}.jpg"
+              stem=filename[:-4]
+              # যে সূরার ভিডিও বানানো হবে শুধু তার আয়াতগুলোর জন্য এনিমেশন লেয়ার তৈরি হয়
+              animate = bool(SURAH_PREFIX) and filename.startswith(SURAH_PREFIX)
+              sura_disp=to_bangla_num(disp(sura_int))
+              ayat_disp=to_bangla_num(disp(ayat_int))
+              show_ayat = ayat_int!= 0
+              line_y = LINE_Y if show_ayat else LINE_Y_NO_AYAT
+              names_y = line_y + int(55*SCALE)
+
+              f_sura=get_font(False, BASE_SURA)
+              max_w=W-LEFT_W-int(140*SCALE)
+              _calc_draw = ImageDraw.Draw(Image.new("RGB",(10,10)))
+
+              arabic_raw=normalize_arabic_display(item.get('names','').strip())
+              _ar_words = merge_marker_tokens(arabic_raw.split())
+              cleaned=clean_name(item.get('name',''))
+              _bn_words = cleaned.split()
+
+              def wrap_words(words, font):
+                  lines=[]; cur=""
+                  for w in words:
+                      test=f"{cur} {w}".strip()
+                      if _calc_draw.textlength(test, font=font) <= max_w:
+                          cur=test
+                      else:
+                          if cur: lines.append(cur)
+                          cur=w
+                  if cur: lines.append(cur)
+                  return lines
+
+              # লম্বা আয়াতে ফন্ট একটু একটু ছোট করে (k) পুরো লেখা 2160 উচ্চতায় বসানো হয়।
+              # ছোট ফন্টে লাইনও কমে, তাই সাইডবার/ফ্রেম ছোট হয় না, শুধু ওই আয়াতের লেখা ছোট হয়।
+              avail_h = CANVAS_H - FIT_TOP - FIT_BOTTOM
+              k = 1.0
+              while True:
+                  f_ar = get_font(True, BASE_AR*k)
+                  f_bn = get_font(False, BASE_BN*k)
+                  f_kanzul = get_font(False, BASE_KANZUL*k)
+                  arabic_lines = wrap_words(_ar_words, f_ar)
+                  bn_lines = wrap_words(_bn_words, f_bn)
+                  AR_LH = int(BASE_AR*k*SCALE*1.5)
+                  BN_LH = int(BASE_BN*k*SCALE*1.4)
+                  GAP1 = int(50*SCALE*k)
+                  GAP2 = int(75*SCALE*k)
+                  total_block_h = len(arabic_lines)*AR_LH + GAP1 + GAP2 + len(bn_lines)*BN_LH
+                  if total_block_h <= avail_h or k <= MIN_K:
+                      break
+                  k = round(k - 0.02, 2)
+
+              # সাধারণত H = 2160; k ন্যূনতমে গিয়েও না ধরলে (অতি বিরল) ফ্রেম বাড়ে
+              H = max(CANVAS_H, total_block_h + FIT_TOP + FIT_BOTTOM)
+              if k < 1.0:
+                  print(f"[FIT] {filename}: font scale {k}, lines AR={len(arabic_lines)} BN={len(bn_lines)}")
+
+              bg = make_canvas(H)
+              draw=ImageDraw.Draw(bg)
+              draw.rectangle([0,0,LEFT_W,H], fill=(214,218,228))
+              draw.line([(LEFT_W,0),(LEFT_W,H)], fill=(35,45,85), width=int(4*SCALE))
+
+              if os.path.exists(LOGO):
+                  try:
+                      ls=int(200*SCALE)
+                      logo=Image.open(LOGO).convert("RGBA").resize((ls,ls), Image.LANCZOS)
+                      bg.paste(logo,(int((LEFT_W-ls)//2), int(30*SCALE)), logo)
+                  except: pass
+
+              start_y = max(FIT_TOP, (H - total_block_h - BOTTOM_MARGIN)//2)
+
+              draw_centered_label_colon(draw, SURA_Y, "সূরা", sura_disp, f_sura, (0,0,0))
+              if show_ayat:
+                  draw_centered_label_colon(draw, AYAT_Y, "আয়াত", ayat_disp, f_sura, (0,0,0))
+              draw.line([(int(40*SCALE), line_y), (int(LEFT_W-40*SCALE), line_y)], fill=(100,100,120), width=2)
+
+              f_ar_det=get_font_by_size(True, BASE_DETAILS_AR*SCALE)
+              f_bn_det=get_font_by_size(False, BASE_DETAILS_BN*SCALE)
+              ar_w = draw.textlength(AR_NAME, font=f_ar_det)
+              draw.text(((LEFT_W - ar_w)//2, names_y), AR_NAME, font=f_ar_det, fill=(20,20,60))
+              draw_bn_name_lines(draw, names_y + int(BASE_DETAILS_AR*SCALE*1.6) + GAP_Y_DETAILS, f_bn_det)
+
+              # ---- এনিমেশন লেয়ার ১: সাইডবার + ব্যাকগ্রাউন্ড (স্থির অংশ) ----
+              # এই পর্যন্ত আঁকা ছবিতে শুধু ব্যাকগ্রাউন্ড + সাইডবার আছে; আরবি আয়াত ও অনুবাদ এখনো আঁকা হয়নি।
+              # H != 2160 হলে (অতি বিরল) এনিমেশন বাদ, ধাপ ২ তখন আগের মতো স্থির ছবি ব্যবহার করবে।
+              do_anim = animate and H == CANVAS_H
+              PANE_X = LEFT_W
+              if do_anim:
+                  bg.save(os.path.join(ANIM, f"{stem}_base.jpg"), "JPEG", quality=95, subsampling=0)
+                  # আরবি আয়াত ও "কানযুল ঈমান" লেবেলের জন্য স্বচ্ছ (RGBA) লেয়ার।
+                  # লেয়ার আগে থেকেই লেখার রঙে ভরা (alpha=0), যাতে অ্যান্টি-অ্যালিয়াসিং এর কিনারা সুন্দর থাকে।
+                  lay_ar = Image.new("RGBA", (W-PANE_X, H), (0,0,0,0))
+                  lay_kz = Image.new("RGBA", (W-PANE_X, H), (20,40,120,0))
+                  d_ar = ImageDraw.Draw(lay_ar)
+                  d_kz = ImageDraw.Draw(lay_kz)
+
+              y=start_y
+              for line in arabic_lines:
+                  w=draw.textlength(line, font=f_ar)
+                  ax=W-int(70*SCALE)-w
+                  draw.text((ax, y), line, font=f_ar, fill=(0,0,0))
+                  if do_anim:
+                      d_ar.text((ax-PANE_X, y), line, font=f_ar, fill=(0,0,0,255))
+                  y+=AR_LH
+
+              y+=GAP1
+              KZ_X=LEFT_W+int(50*SCALE)
+              draw_label_colon(draw, KZ_X, y, "কানযুল ঈমান থেকে অনুবাদ", "", f_kanzul, (20,40,120))
+              if do_anim:
+                  draw_label_colon(d_kz, KZ_X-PANE_X, y, "কানযুল ঈমান থেকে অনুবাদ", "", f_kanzul, (20,40,120,255))
+              y+=GAP2
+
+              # ---- এনিমেশন লেয়ার ২: আরবি + লেবেল PNG হিসেবে সেভ (শুধু যতটুকু জায়গা লাগে ততটুকু) ----
+              ar_xy=[PANE_X, 0]
+              if do_anim:
+                  lay = Image.alpha_composite(lay_ar, lay_kz)
+                  bb = lay.getchannel("A").getbbox()
+                  if bb:
+                      pad = 6
+                      bb = (max(0,bb[0]-pad), max(0,bb[1]-pad), min(lay.width,bb[2]+pad), min(lay.height,bb[3]+pad))
+                      # ওভারলের শুরুর x/y জোড় সংখ্যা রাখা হয়, নইলে YUV 4:2:0 তে রঙের প্রান্ত ১ পিক্সেল সরে যায়
+                      bb = (bb[0] - (bb[0] % 2), bb[1] - (bb[1] % 2), bb[2], bb[3])
+                  else:
+                      bb = (0, 0, 2, 2)
+                  lay.crop(bb).save(os.path.join(ANIM, f"{stem}_ar.png"), compress_level=3)
+                  ar_xy=[bb[0]+PANE_X, bb[1]]
+                  del lay_ar, lay_kz, lay
+
+              # ---- বাংলা অনুবাদ: ছবিতে আঁকা + টাইপরাইটারের জন্য প্রতিটি শব্দের অবস্থান রেকর্ড ----
+              bn_y0 = y
+              bn_json_lines=[]
+              for i,line in enumerate(bn_lines):
+                  words=line.split()
+                  is_last=i==len(bn_lines)-1
+                  segs=None
+                  if not is_last and len(words)>1:
+                      base_w=sum(draw.textlength(w, font=f_bn) for w in words) + draw.textlength(" ", font=f_bn)*(len(words)-1)
+                      extra=max_w-base_w
+                      gap=extra/(len(words)-1) if len(words)>1 else 0
+                      if 0 < gap < 70*SCALE:
+                          tx=LEFT_W+int(50*SCALE)
+                          segs=[]
+                          for w in words:
+                              draw.text((tx,y), w, font=f_bn, fill=(15,25,85))
+                              segs.append({"text": w, "x": tx})
+                              tx+=draw.textlength(w, font=f_bn)+draw.textlength(" ", font=f_bn)+gap
+                      else:
+                          draw.text((LEFT_W+int(50*SCALE), y), line, font=f_bn, fill=(15,25,85))
+                  else:
+                      draw.text((LEFT_W+int(50*SCALE), y), line, font=f_bn, fill=(15,25,85))
+                  if segs is None:
+                      segs=[{"text": line, "x": LEFT_W+int(50*SCALE)}]
+                  bn_json_lines.append({"y": y, "segs": segs})
+                  y+=BN_LH
+
+              bg.save(os.path.join(OUT, filename), "JPEG", quality=95, subsampling=0)
+
+              if do_anim:
+                  rx0 = LEFT_W + int(20*SCALE)
+                  rx1 = W - int(20*SCALE)
+                  ry0 = max(0, int(bn_y0 - 0.30*BN_LH))
+                  ry1 = min(H, int(y + 0.30*BN_LH))
+                  ry0 -= ry0 % 2          # জোড় সংখ্যা (YUV 4:2:0 এর সাথে মেলাতে)
+                  ry1 -= ry1 % 2
+                  rx0 -= rx0 % 2
+                  rx1 -= rx1 % 2
+                  meta = {
+                      "animated": True,
+                      "base": f"{stem}_base.jpg",
+                      "ar_png": f"{stem}_ar.png",
+                      "ar_xy": ar_xy,
+                      "bn": {
+                          "font": FONT_BN,
+                          "font_px": int(BASE_BN*k*SCALE),
+                          "color": [15,25,85],
+                          "region": [rx0, ry0, rx1, ry1],
+                          "lines": bn_json_lines,
+                      },
+                  }
+                  with open(os.path.join(ANIM, f"{stem}.json"), "w", encoding="utf-8") as jf:
+                      json.dump(meta, jf, ensure_ascii=False)
+
+              # split_ayahs এ থাকা আয়াত হলে আলাদা আরবি-only ও বাংলা-only লেয়ার বানানো (স্বাভাবিক ছবি/লেয়ার ফলব্যাক হিসেবে থাকে)
+              if animate and ayat_int in SPLIT_SET:
+                  make_split_layers(stem, _ar_words, _bn_words, max_w,
+                                    {"sura_disp": sura_disp, "ayat_disp": ayat_disp, "show_ayat": show_ayat,
+                                     "line_y": line_y, "names_y": names_y, "f_sura": f_sura})
+
+              print(f"Done {filename} | W={W} H={H} | AR font {BASE_DETAILS_AR} BN font {BASE_DETAILS_BN}" + (" | anim layers saved" if do_anim else ""))
+
+          PY
+
+
+      - name: Step 5 - Upload ayah images artifact
+        if: ${{ inputs.run_video }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ayah-images
+          path: ${{ inputs.image_folder }}/
+          retention-days: 7
+
+
+      - name: Step 5 - Push output images
+        if: ${{ inputs.run_video }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -f "${{ inputs.image_folder }}/"
+          git commit -m "fix: all ayah images fixed 3840x2160, long ayah fonts auto-shrink to fit" || echo "no changes"
+          git push
+
+      # =====================================================================
+      # ধাপ ৫ক: ভিডিওর ইনপুট প্যাক (এনিমেশন লেয়ার + এই সূরার ছবি + থাম্বনেইল)
+      #         নিচের pipeline job গুলো (প্রতি সোর্সের জন্য একটি) এখান থেকে নিয়ে নেবে
+      # =====================================================================
+      - name: Step 5 - Pack video inputs (anim layers + this surah images + thumbnail)
+        if: ${{ inputs.run_video }}
+        env:
+          IMAGE_FOLDER: ${{ inputs.image_folder }}
+        run: |
+          mkdir -p video_inputs/image_dir video_inputs/thumbnail
+          if [ -d anim_layers ]; then
+            cp -r anim_layers video_inputs/anim_layers
+          else
+            mkdir -p video_inputs/anim_layers
+          fi
+          cp "$IMAGE_FOLDER"/${SURAH_PAD}*.jpg video_inputs/image_dir/
+          if [ -f "thumbnail/${SURAH_NUM}.png" ]; then
+            cp "thumbnail/${SURAH_NUM}.png" video_inputs/thumbnail/
+          fi
+          du -sh video_inputs
+
+      - name: Step 5 - Upload video inputs artifact (for pipeline jobs)
+        if: ${{ inputs.run_video }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: video-inputs
+          path: video_inputs/
+          retention-days: 2
+
+  # =====================================================================
+  # Job ২: pipeline — প্রতিটি সোর্সের জন্য আলাদা job, সমান্তরালে (parallel) চলে
+  #        ডাউনলোড → মার্জ → ট্যাগ → 4K ভিডিও → HD → Release (প্রতি সোর্সের নিজস্ব ফোল্ডার ও Release)
+  #        audio_source = both হলে দুটো, নইলে একটি job চলে
+  # =====================================================================
+  pipeline:
+    name: Pipeline (${{ matrix.source }})
+    needs: prepare
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      BRANCH: ${{ github.ref_name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        source: ${{ fromJSON(needs.prepare.outputs.sources) }}
+
+    steps:
+      # =====================================================================
+      # ধাপ ০: প্রস্তুতি (Checkout + ইনপুট নরমালাইজ + টুলস ইনস্টল)
+      # =====================================================================
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}   # prepare job এর push করা সর্বশেষ commit সহ
+
+
+      - name: Step 0 - Normalize Surah Number (বাংলা/ইংরেজি/001 সব ফরম্যাট সামলাবে)
+        env:
+          SURAH_INPUT: ${{ inputs.surah_number }}
+          QARI_FOLDER: ${{ inputs.qari_folder }}
+          DAWAT_FOLDER: ${{ inputs.dawateislami_folder }}
+          AUDIO_SOURCE: ${{ matrix.source }}
+          QARI_INPUT: ${{ inputs.qari }}
+          DAWAT_CODE: ${{ inputs.dawateislami_code }}
+        run: |
+          python3 << 'PY'
+          import os, re, sys
+
+          raw = os.environ.get("SURAH_INPUT", "").strip()
+          # বাংলা সংখ্যা থাকলে ইংরেজিতে রূপান্তর
+          raw = raw.translate(str.maketrans("০১২৩৪৫৬৭৮৯", "0123456789"))
+          digits = re.sub(r"\D", "", raw)
+
+          if not digits:
+              print("Error: সূরার নম্বর দিতে হবে (শুধু সংখ্যা)")
+              sys.exit(1)
+
+          num = int(digits)
+          if num < 1 or num > 114:
+              print("Error: Surah number must be between 1 and 114")
+              sys.exit(1)
+
+          pad = f"{num:03d}"
+          print(f"Surah number -> {num} (3-digit: {pad})")
+
+          # ক্বারীর ফোল্ডারের নাম: Audio/<qari>/001/001.mp3, rizwanaudio/<qari>/001/001.mp3, rizwanSurahVideo/<qari>/001.mp4
+          # অডিওর সোর্স: everyayah (qari ইনপুট অনুযায়ী) অথবা dawateislami
+          source = os.environ.get("AUDIO_SOURCE", "everyayah").strip() or "everyayah"
+          if source not in ("everyayah", "dawateislami"):
+              print("Error: audio_source শুধু everyayah বা dawateislami হতে পারে")
+              sys.exit(1)
+          dawat_code = os.environ.get("DAWAT_CODE", "01").strip()
+          if source == "dawateislami" and not re.fullmatch(r"\d{2}", dawat_code):
+              print("Error: dawateislami_code ঠিক ২ অঙ্কের সংখ্যা হতে হবে (যেমন: 01)")
+              sys.exit(1)
+          # ফোল্ডারের নাম ফাঁকা থাকলে অটো: everyayah -> alafasy, dawateislami -> dawateislami
+          folder_in = os.environ.get("DAWAT_FOLDER", "") if source == "dawateislami" else os.environ.get("QARI_FOLDER", "")
+          qari_dir = folder_in.strip().strip("/") or ("dawateislami" if source == "dawateislami" else "alafasy")
+          # Release / commit এ দেখানোর ক্বারীর নাম
+          qari_label = "Dawateislami" if source == "dawateislami" else re.sub(r"[^A-Za-z0-9._ -]", "", os.environ.get("QARI_INPUT", "").strip())
+          if not re.fullmatch(r"[A-Za-z0-9._-]+", qari_dir) or qari_dir in (".", ".."):
+              print("Error: ক্বারী ফোল্ডারের নামে শুধু ইংরেজি অক্ষর, সংখ্যা, '.', '_' ও '-' চলবে (যেমন: alafasy)")
+              sys.exit(1)
+          print(f"Audio source -> {source} | Qari folder -> {qari_dir} | label -> {qari_label}")
+
+          # 114 টা সূরার আয়াত সংখ্যা (Release এর তথ্যের জন্য)
+          AYAH_COUNTS = [0, 7, 286, 200, 176, 120, 165, 206, 75, 129, 109, 123, 111, 43, 52, 99, 128, 111, 110, 98, 135, 112, 78, 118, 64, 77, 227, 93, 88, 69, 60, 34, 30, 73, 54, 45, 83, 182, 88, 75, 85, 54, 53, 89, 59, 37, 35, 38, 29, 18, 45, 60, 49, 62, 55, 78, 96, 29, 22, 24, 13, 14, 11, 11, 18, 12, 12, 30, 52, 52, 44, 28, 28, 20, 56, 40, 31, 50, 40, 46, 42, 29, 19, 36, 25, 22, 17, 19, 26, 30, 20, 15, 21, 11, 8, 8, 19, 5, 8, 8, 11, 11, 8, 3, 9, 5, 4, 7, 3, 6, 3, 5, 4, 5, 6]
+          ayah_count = AYAH_COUNTS[num]
+          to_bn = str.maketrans("0123456789", "০১২৩৪৫৬৭৮৯")
+
+          with open(os.environ["GITHUB_ENV"], "a") as f:
+              f.write(f"AUDIO_SOURCE={source}\n")      # everyayah / dawateislami
+              f.write(f"QARI_LABEL={qari_label}\n")        # Release ও commit এ দেখানোর নাম
+              f.write(f"DAWAT_CODE={dawat_code}\n")         # dawateislami ফাইলের নামের ২ অঙ্কের কোড
+              f.write(f"QARI_DIR={qari_dir}\n")     # যেমন: alafasy (Audio, rizwanaudio, rizwanSurahVideo এর ক্বারী ফোল্ডার)
+              f.write(f"SURAH_NUM={num}\n")     # যেমন: 1   (ডাউনলোড + থাম্বনেইলের ফাইলের নাম)
+              f.write(f"SURAH_PAD={pad}\n")     # যেমন: 001 (মার্জ, ট্যাগ, ছবি, ভিডিও)
+              f.write(f"AYAH_COUNT={ayah_count}\n")                        # যেমন: 7
+              f.write(f"SURAH_NUM_BN={str(num).translate(to_bn)}\n")        # যেমন: ১
+              f.write(f"AYAH_COUNT_BN={str(ayah_count).translate(to_bn)}\n")  # যেমন: ৭
+          PY
+
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+
+      - name: Install FFmpeg
+        if: ${{ inputs.run_merge || inputs.run_video }}
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+
+      - name: Install Python packages (Pillow, mutagen)
+        run: |
+          pip install Pillow mutagen
+
+      # =====================================================================
+      # দুই job একসাথে push করলে conflict এড়াতে retry সহায়ক (.gitattributes এ LFS লাইন merge=union)
+      # =====================================================================
+      - name: Prepare push helper (parallel push retry)
+        run: |
+          cat > "$RUNNER_TEMP/push_retry.sh" << 'SH'
+          push_retry() {
+            for i in 1 2 3 4 5 6; do
+              git pull --rebase origin "$BRANCH" || git rebase --abort || true
+              if git push; then
+                return 0
+              fi
+              echo "push failed (attempt $i) - retrying"
+              sleep $(( (RANDOM % 8) + 3 ))
+            done
+            return 1
+          }
+          SH
+          echo ".gitattributes merge=union" >> .git/info/attributes
+
+
+      - name: Create folder structure
+        env:
+          AUDIO_FOLDER: ${{ inputs.audio_folder }}
+        run: |
+          mkdir -p "Audio/${QARI_DIR}/${SURAH_PAD}"
+          mkdir -p "Audio/bangla/${SURAH_PAD}"
+          mkdir -p "${AUDIO_FOLDER}/${QARI_DIR}/${SURAH_PAD}"
+          mkdir -p "rizwanSurahVideo/${QARI_DIR}"
+
+
+      # =====================================================================
+      # ধাপ ১: Surah অডিও ডাউনলোড (Alafasy)
+      # =====================================================================
+      - name: Step 1 - Download Selected Surah
+        if: ${{ inputs.run_download }}
+        env:
+          QARI: ${{ inputs.qari }}
+        run: |
+          SURAH_NUM="$SURAH_NUM"
+          if [ "$AUDIO_SOURCE" = "dawateislami" ]; then
+            BASE_URL="https://data2.dawateislami.net/static/images/main-website/quran-arabic-audios"
+          else
+            BASE_URL="https://everyayah.com/data/$QARI"
+          fi
+          DEST_DIR="Audio/${QARI_DIR}/$(printf "%03d" "$SURAH_NUM")"   # যেমন: Audio/alafasy/001
+
+          # 114 টা সূরার আয়াত সংখ্যা
+          AYAH_COUNTS=(0 7 286 200 176 120 165 206 75 129 109 123 111 43 52 99 128 111 110 98 135 112 78 118 64 77 227 93 88 69 60 34 30 73 54 45 83 182 88 75 85 54 53 89 59 37 35 38 29 18 45 60 49 62 55 78 96 29 22 24 13 14 11 11 18 12 12 30 52 52 44 28 28 20 56 40 31 50 40 46 42 29 19 36 25 22 17 19 26 30 20 15 21 11 8 8 19 5 8 8 11 11 8 3 9 5 4 7 3 6 3 5 4 5 6)
+
+          if ! [[ "$SURAH_NUM" =~ ^[0-9]+$ ]] || [ "$SURAH_NUM" -lt 1 ] || [ "$SURAH_NUM" -gt 114 ]; then
+            echo "Error: Surah number must be between 1 and 114"
+            exit 1
+          fi
+
+          TOTAL_AYAH=${AYAH_COUNTS[$SURAH_NUM]}
+          SURAH_PAD=$(printf "%03d" $SURAH_NUM)
+          mkdir -p "$DEST_DIR"
+
+          echo "Downloading Surah $SURAH_NUM (Total Ayahs: $TOTAL_AYAH) from $AUDIO_SOURCE ($QARI_LABEL)..."
+
+          for ayah in $(seq 1 $TOTAL_AYAH); do
+            AYAH_PAD=$(printf "%03d" $ayah)
+            FILE_NAME="${SURAH_PAD}${AYAH_PAD}.mp3"
+            if [ "$AUDIO_SOURCE" = "dawateislami" ]; then
+              # উদাহরণ: .../quran-arabic-audios/001/A01001001.mp3  (সূরা ফোল্ডার / A + কোড + সূরা + আয়াত)
+              URL="$BASE_URL/${SURAH_PAD}/A${DAWAT_CODE}${SURAH_PAD}${AYAH_PAD}.mp3"
+            else
+              URL="$BASE_URL/$FILE_NAME"
+            fi
+            DEST_PATH="$DEST_DIR/${AYAH_PAD}.mp3"   # ফাইলের নাম শুধু আয়াত নম্বর (যেমন: 001.mp3)
+
+            echo "Downloading $URL -> $DEST_PATH"
+            curl -L --fail --retry 3 -o "$DEST_PATH" "$URL"
+            sleep 0.5
+          done
+
+          echo "Done! Files:"
+          ls -lh "$DEST_DIR"/
+
+
+      - name: Step 1 - Commit and Push Audio Files
+        if: ${{ inputs.run_download }}
+        env:
+          QARI: ${{ env.QARI_LABEL }}
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add Audio/
+          git diff --staged --quiet || git commit -m "Add Surah $SURAH_NUM - $QARI_DIR ($QARI)"
+          source "$RUNNER_TEMP/push_retry.sh"
+          push_retry
+
+
+      # =====================================================================
+      # ধাপ ২: Arabic + Bangla অডিও মার্জ (Rizwan)
+      # =====================================================================
+      - name: Step 2 - Merge Audios for Specific Surah
+        if: ${{ inputs.run_merge }}
+        env:
+          AUDIO_FOLDER: ${{ inputs.audio_folder }}
+        run: |
+          ARABIC_DIR="Audio/${QARI_DIR}/${SURAH_PAD}"             # যেমন: Audio/alafasy/001/001.mp3
+          BANGLA_DIR="Audio/bangla/${SURAH_PAD}"                  # যেমন: Audio/bangla/001/001.mp3 (সব ক্বারীর জন্য একই)
+          OUTPUT_DIR="${AUDIO_FOLDER}/${QARI_DIR}/${SURAH_PAD}"   # যেমন: rizwanaudio/alafasy/001/001.mp3
+          SURAH="$SURAH_PAD"
+
+          mkdir -p "$OUTPUT_DIR"
+
+          echo "প্রসেস করা হচ্ছে সূরা নম্বর: $SURAH"
+
+          # নির্দিষ্ট সূরার প্যাটার্ন (যেমন: 001*.mp3) অনুযায়ী ফাইল খোঁজা হচ্ছে
+          if [ ! -d "$ARABIC_DIR" ]; then
+            echo "Error: আরবি অডিও ফোল্ডার পাওয়া যায়নি: $ARABIC_DIR (আগে ধাপ ১ চালান, অথবা migration workflow চালান)"
+            exit 1
+          fi
+          if [ ! -d "$BANGLA_DIR" ]; then
+            echo "Warning: বাংলা অডিও ফোল্ডার পাওয়া যায়নি: $BANGLA_DIR — শুধু আরবি অডিও কপি হবে"
+          fi
+
+          # নতুন স্ট্রাকচারে সূরার ফোল্ডারের সব ফাইলই (001.mp3, 002.mp3 ...) ওই সূরার আয়াত
+          for arabic_file in "$ARABIC_DIR"/*.mp3; do
+            [ -e "$arabic_file" ] || continue
+            file_name=$(basename "$arabic_file")
+            bangla_file="$BANGLA_DIR/$file_name"
+            output_file="$OUTPUT_DIR/$file_name"
+
+            if [ -f "$bangla_file" ]; then
+              echo "MERGING $file_name"
+              ffmpeg -y -hide_banner -loglevel error -i "$arabic_file" -i "$bangla_file" -filter_complex "[0:a][1:a]concat=n=2:v=0:a=1[a]" -map "[a]" -ar 44100 -ac 2 -b:a 128k "$output_file"
+            else
+              cp "$arabic_file" "$output_file"
+            fi
+          done
+
+          ls -lh "$OUTPUT_DIR"/
+
+
+      - name: Step 2 - Upload Artifact (Download from here)
+        if: ${{ inputs.run_merge }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: rizwanaudio-${{ env.QARI_DIR }}-Surah-${{ env.SURAH_PAD }}
+          path: ${{ inputs.audio_folder }}/${{ env.QARI_DIR }}/${{ env.SURAH_PAD }}/
+
+
+      - name: Step 2 - Force Commit to Repo
+        if: ${{ inputs.run_merge }}
+        env:
+          AUDIO_FOLDER: ${{ inputs.audio_folder }}
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          rm -rf kanzulImanAudio
+          git rm -r --cached kanzulImanAudio || true
+          git add -f "$AUDIO_FOLDER"/
+          git commit -m "Merged Surah $SURAH_PAD Audio to $AUDIO_FOLDER/$QARI_DIR" || echo "No changes to commit"
+          source "$RUNNER_TEMP/push_retry.sh"
+          push_retry
+
+
+      # =====================================================================
+      # ধাপ ৩: MP3 ID3V1 + ID3V2 ট্যাগ ঠিক করা, LyricsTag ক্লিয়ার
+      # =====================================================================
+      - name: Step 3 - Fix ID3V1, ID3V2 and Clear LyricsTag
+        if: ${{ inputs.run_tags }}
+        env:
+          FILE_PREFIX: ${{ env.SURAH_PAD }}
+          METADATA_VALUE: ${{ inputs.metadata_value }}
+          AUDIO_FOLDER: ${{ inputs.audio_folder }}
+        run: |
+          python3 << 'PY'
+          import os
+          from mutagen.mp3 import MP3
+          from mutagen.id3 import ID3, TIT2, TPE1, TALB, TPE2, TCOM, TCON, COMM, ID3NoHeaderError
+
+          ROOT = os.environ.get("AUDIO_FOLDER", "rizwanaudio")
+          QARI_DIR = os.environ["QARI_DIR"]
+          PREFIX = os.environ["FILE_PREFIX"]   # সূরা নম্বর (যেমন: 001) — এখন এটাই সূরার ফোল্ডারের নাম
+          META = os.environ["METADATA_VALUE"]
+          FOLDER = os.path.join(ROOT, QARI_DIR, PREFIX)   # যেমন: rizwanaudio/alafasy/001
+
+          if not os.path.isdir(FOLDER):
+              raise SystemExit(f"Error: ফোল্ডার পাওয়া যায়নি: {FOLDER} (আগে ধাপ ২ মার্জ চালান, অথবা migration workflow চালান)")
+
+          for fname in sorted(os.listdir(FOLDER)):
+              if not fname.lower().endswith(".mp3"):
+                  continue
+
+              fpath = os.path.join(FOLDER, fname)
+              print(f"Processing: {fpath}")
+
+              try:
+                  audio = MP3(fpath, ID3=ID3)
+              except ID3NoHeaderError:
+                  audio = MP3(fpath)
+                  audio.add_tags()
+
+              if audio.tags is None:
+                  audio.add_tags()
+
+              # 1. আগের সব Tag, LyricsTag, Cover সব ডিলিট
+              audio.tags.clear()
+
+              # 2. নতুন করে সব Field এ Rizwan বসানো - ID3V2
+              audio.tags.add(TIT2(encoding=3, text=META)) # Title
+              audio.tags.add(TPE1(encoding=3, text=META)) # Artist
+              audio.tags.add(TALB(encoding=3, text=META)) # Album
+              audio.tags.add(TPE2(encoding=3, text=META)) # Album Artist
+              audio.tags.add(TCOM(encoding=3, text=META)) # Composer
+              audio.tags.add(TCON(encoding=3, text=META)) # Genre
+              audio.tags.add(COMM(encoding=3, lang='eng', desc='', text=META)) # Comment
+
+              # 3. ID3V1 + ID3V2 দুইটাই save হবে
+              audio.tags.save(fpath, v1=2, v2_version=3)
+
+              print(f"Done -> {fname} | Format: audio/mpeg | ID3V1+ID3V2={META} | Lyrics=Cleared")
+
+          PY
+
+
+      - name: Step 3 - Commit & Push Tags
+        if: ${{ inputs.run_tags }}
+        env:
+          AUDIO_FOLDER: ${{ inputs.audio_folder }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "$AUDIO_FOLDER"/
+          if git diff --staged --quiet; then
+            echo "No changes"
+          else
+            git commit -m "fix: MP3 ID3V1+ID3V2 set to ${{ inputs.metadata_value }}, LyricsTag cleared for ${QARI_DIR}/${SURAH_PAD}"
+            source "$RUNNER_TEMP/push_retry.sh"
+            push_retry
+          fi
+
+      # =====================================================================
+      # ভিডিওর ইনপুট (prepare job থেকে): এনিমেশন লেয়ার + এই সূরার আয়াতের ছবি + থাম্বনেইল
+      # =====================================================================
+      - name: Step 6 - Download video inputs (from prepare job)
+        if: ${{ inputs.run_video }}
+        uses: actions/download-artifact@v4
+        with:
+          name: video-inputs
+          path: video_inputs
+
+      - name: Step 6 - Place video inputs (anim layers, ayah images, thumbnail)
+        if: ${{ inputs.run_video }}
+        env:
+          IMAGE_FOLDER: ${{ inputs.image_folder }}
+        run: |
+          rm -rf anim_layers
+          if [ -d video_inputs/anim_layers ]; then
+            cp -r video_inputs/anim_layers anim_layers
+          else
+            mkdir -p anim_layers
+          fi
+          mkdir -p "$IMAGE_FOLDER"
+          cp video_inputs/image_dir/*.jpg "$IMAGE_FOLDER"/
+          if ls video_inputs/thumbnail/* > /dev/null 2>&1; then
+            mkdir -p thumbnail
+            cp video_inputs/thumbnail/* thumbnail/
+          fi
+          echo "Images for ${SURAH_PAD}: $(ls "$IMAGE_FOLDER"/${SURAH_PAD}*.jpg | wc -l)"
+          echo "Anim layers: $(ls anim_layers 2>/dev/null | wc -l) files"
+
+
+      # =====================================================================
+      # ধাপ ৬: এনিমেটেড আয়াত ভিডিও (টাইপরাইটার + ট্রানজিশন) → এক সূরার 4K ভিডিও
+      # =====================================================================
+      - name: Step 6 - Make Animated Ayat Videos (Typewriter + Transitions) and Merge to One Surah Video - 4K (3840x2160 fixed)
+        if: ${{ inputs.run_video }}
+        env:
+          IMG_DIR: ${{ inputs.image_folder }}
+          AUDIO_DIR: ${{ inputs.audio_folder }}
+          SURAH: ${{ env.SURAH_PAD }}
+          QARI_DIR: ${{ env.QARI_DIR }}
+          TYPING_SPEED: ${{ inputs.typing_speed }}
+          TRANSITION_SECONDS: ${{ inputs.transition_seconds }}
+          METADATA_VALUE: ${{ inputs.metadata_value }}
+        run: |
+          TEMP_IMG_DIR="temp_${SURAH}_images_fixed"
+          TEMP_VIDEO_DIR="temp_${SURAH}_videos"
+          FINAL_DIR="rizwanSurahVideo/${QARI_DIR}"
+          TARGET_W=3840
+          TARGET_H=2160
+          export TEMP_IMG_DIR TEMP_VIDEO_DIR TARGET_W TARGET_H
+
+          mkdir -p "$TEMP_IMG_DIR"
+          mkdir -p "$TEMP_VIDEO_DIR"
+          mkdir -p "$FINAL_DIR"
+
+          python3 << 'PY'
+          from PIL import Image, ImageDraw, ImageFont
+          import os, glob, json, math, subprocess, unicodedata
+
+          IMG_DIR        = os.environ["IMG_DIR"]
+          AUDIO_DIR      = os.environ["AUDIO_DIR"]
+          SURAH          = os.environ["SURAH"]
+          QARI_DIR       = os.environ["QARI_DIR"]
+          AUDIO_SURAH_DIR = os.path.join(AUDIO_DIR, QARI_DIR, SURAH)   # যেমন: rizwanaudio/alafasy/001
+          TEMP_IMG_DIR   = os.environ["TEMP_IMG_DIR"]
+          TEMP_VIDEO_DIR = os.environ["TEMP_VIDEO_DIR"]
+          TARGET_W       = int(os.environ.get("TARGET_W", "3840"))
+          TARGET_H       = int(os.environ.get("TARGET_H", "2160"))
+          ANIM_DIR       = "anim_layers"
+          FPS            = 30
+
+          def _num(name, default, lo, hi):
+              try:
+                  v = float(str(os.environ.get(name, "")).strip())
+              except Exception:
+                  v = default
+              return max(lo, min(hi, v))
+
+          TYPING_CPS  = _num("TYPING_SPEED", 18.0, 3.0, 200.0)       # প্রতি সেকেন্ডে অক্ষর
+          TRANS       = _num("TRANSITION_SECONDS", 0.5, 0.0, 2.0)    # আয়াত বদলের ফেড/স্লাইডের সময়
+          TYPE_DELAY  = 0.30     # আয়াত শুরুর কতক্ষণ পর টাইপ শুরু হবে (সেকেন্ড)
+          MIN_HOLD    = 0.8      # টাইপ শেষে পুরো অনুবাদ কমপক্ষে এতক্ষণ স্থির থাকবে
+          SLIDE_PX    = int(40 * TARGET_W / 1280)   # নতুন আয়াতের লেখা ডান দিক থেকে এতটুকু স্লাইড করে আসবে
+          SHOW_CURSOR = True     # টাইপ করার সময় শেষ অক্ষরের পাশে কার্সর
+
+          # ------------------------------------------------------------------
+          # স্থির ছবি ঠিক 3840x2160 বানানোর ফাংশন (ফলব্যাক হিসেবে আগের মতোই কাজ করে)
+          # ------------------------------------------------------------------
+          def make_canvas_fixed(img_path, out_path):
+              img = Image.open(img_path).convert("RGB")
+              name = os.path.basename(img_path)
+              W_orig, H_orig = img.size
+
+              # 1. আগে width 3840 করা (আগের মতোই)
+              if W_orig != TARGET_W:
+                  new_h = round(H_orig * TARGET_W / W_orig)
+                  img = img.resize((TARGET_W, new_h), Image.LANCZOS)
+                  print(f"[INFO] {name} width {W_orig} -> {TARGET_W}, height {H_orig}->{new_h}")
+
+              W, H = img.size
+
+              if H < TARGET_H:
+                  # ছোট ছবি: নিচের 10px স্ট্রিপ টেনে নিচে বাড়ানো (সাইডবার ও লাইন শেষ পর্যন্ত চলে)
+                  canvas = Image.new("RGB", (TARGET_W, TARGET_H), (232,236,244))
+                  canvas.paste(img, (0, 0))
+                  strip = img.crop((0, H-10, TARGET_W, H))
+                  canvas.paste(strip.resize((TARGET_W, TARGET_H - H), Image.LANCZOS), (0, H))
+                  print(f"[INFO] Extended height {H} -> {TARGET_H} for {name}")
+
+              elif H > TARGET_H:
+                  # লম্বা ছবি: ২১৬০ উচ্চতায় ছোট করা (কিছুই কাটা হয় না),
+                  # ডান পাশের ফাঁকা অংশ ডান প্রান্তের 10px স্ট্রিপ টেনে ভরাট
+                  new_w = round(TARGET_W * TARGET_H / H)
+                  if new_w % 2 != 0:
+                      new_w += 1
+                  small = img.resize((new_w, TARGET_H), Image.LANCZOS)
+                  canvas = Image.new("RGB", (TARGET_W, TARGET_H), (232,236,244))
+                  canvas.paste(small, (0, 0))
+                  strip = small.crop((new_w-10, 0, new_w, TARGET_H))
+                  canvas.paste(strip.resize((TARGET_W - new_w, TARGET_H), Image.LANCZOS), (new_w, 0))
+                  print(f"[INFO] Scaled down {name}: {W}x{H} -> {new_w}x{TARGET_H}, right fill {TARGET_W-new_w}px")
+
+              else:
+                  canvas = img
+                  print(f"[INFO] Kept {W}x{H} for {name}")
+
+              canvas.save(out_path, "JPEG", quality=95, subsampling=0)
+
+          # ------------------------------------------------------------------
+          # ফলব্যাক: এনিমেশন ছাড়া স্থির ছবি + অডিও -> ভিডিও (আগের কমান্ডই)
+          # ------------------------------------------------------------------
+          def make_static_clip(img_file, audio_file, out_file):
+              cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                     "-loop", "1", "-framerate", str(FPS), "-i", img_file,
+                     "-i", audio_file,
+                     "-vf", "format=yuv420p", "-r", str(FPS),
+                     "-c:v", "libx264", "-tune", "stillimage", "-preset", "medium", "-crf", "18",
+                     "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
+                     "-shortest", out_file]
+              r = subprocess.run(cmd)
+              return r.returncode == 0
+
+          def audio_duration(path):
+              r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                                  "-of", "default=nw=1:nk=1", path],
+                                 capture_output=True, text=True)
+              try:
+                  return float(r.stdout.strip())
+              except Exception:
+                  return 0.0
+
+          # ------------------------------------------------------------------
+          # বাংলা টেক্সটকে "অক্ষর-গুচ্ছ" (cluster) এ ভাঙা: যুক্তাক্ষর, কার-চিহ্ন, হসন্ত আলাদা হয়ে যায় না
+          # ------------------------------------------------------------------
+          def split_clusters(text):
+              out = []
+              for ch in text:
+                  join = False
+                  if out:
+                      cat = unicodedata.category(ch)
+                      if ch.isspace():
+                          join = True                      # স্পেস আগের অক্ষরের সাথে লাগে (আলাদা ধাপ লাগে না)
+                      elif cat in ("Mn", "Mc", "Me") or ch in ("\u200d", "\u200c"):
+                          join = True                      # কার/চন্দ্রবিন্দু/নুক্তা/ZWJ আগের অক্ষরের সাথে
+                      else:
+                          last = out[-1].rstrip("\u200d\u200c")
+                          if last and unicodedata.combining(last[-1]) == 9:
+                              join = True                  # হসন্তের পরের ব্যঞ্জন একই যুক্তাক্ষরের অংশ
+                  if join:
+                      out[-1] += ch
+                  else:
+                      out.append(ch)
+              return out
+
+          # ------------------------------------------------------------------
+          # টাইপরাইটার ফ্রেম রেন্ডারার: শুধু বাংলা অনুবাদের জায়গাটুকু (স্বচ্ছ RGBA) আঁকে
+          # ------------------------------------------------------------------
+          class TypeRenderer:
+              def __init__(self, bn):
+                  self.rx0, self.ry0, self.rx1, self.ry1 = [int(v) for v in bn["region"]]
+                  self.w = self.rx1 - self.rx0
+                  self.h = self.ry1 - self.ry0
+                  try:
+                      self.font = ImageFont.truetype(bn["font"], int(bn["font_px"]))
+                  except Exception:
+                      self.font = ImageFont.load_default()
+                  r, g, b = bn["color"]
+                  self.ink = (r, g, b, 255)
+                  self.clear = (r, g, b, 0)     # রঙ আগে থেকেই বসানো, alpha=0 => কিনারা ঠিক থাকে
+                  self.lines = []
+                  self.events = []              # প্রতিটি অক্ষর-গুচ্ছ = একটি টাইপিং ইভেন্ট
+                  for li, ln in enumerate(bn["lines"]):
+                      segs = []
+                      for si, sg in enumerate(ln["segs"]):
+                          cl = split_clusters(sg["text"])
+                          segs.append({"x": sg["x"] - self.rx0, "text": sg["text"], "clusters": cl})
+                          for ci in range(len(cl)):
+                              self.events.append((li, si, ci))
+                      self.lines.append({"y": ln["y"] - self.ry0, "segs": segs})
+                  self.n = len(self.events)
+                  self.acc = Image.new("RGBA", (self.w, self.h), self.clear)   # সম্পূর্ণ হয়ে যাওয়া লাইনগুলো
+                  self.acc_d = ImageDraw.Draw(self.acc)
+                  self.acc_upto = 0
+                  asc, desc = self.font.getmetrics()
+                  self.cur_top = int(asc * 0.12)
+                  self.cur_bot = asc + int(desc * 0.5)
+                  self.cur_w = max(3, int(self.font.size * 0.04))
+
+              def empty(self):
+                  return Image.new("RGBA", (self.w, self.h), self.clear)
+
+              def frame(self, e, cursor=True):
+                  # প্রথম e টি অক্ষর-গুচ্ছ পর্যন্ত লেখা দেখাও
+                  if e <= 0:
+                      return self.empty()
+                  li, si, ci = self.events[e-1]
+                  while self.acc_upto < li:
+                      ln0 = self.lines[self.acc_upto]
+                      for sg in ln0["segs"]:
+                          self.acc_d.text((sg["x"], ln0["y"]), sg["text"], font=self.font, fill=self.ink)
+                      self.acc_upto += 1
+                  img = self.acc.copy()
+                  d = ImageDraw.Draw(img)
+                  ln = self.lines[li]
+                  for sj in range(si):
+                      sg = ln["segs"][sj]
+                      d.text((sg["x"], ln["y"]), sg["text"], font=self.font, fill=self.ink)
+                  sg = ln["segs"][si]
+                  prefix = "".join(sg["clusters"][:ci+1])
+                  d.text((sg["x"], ln["y"]), prefix, font=self.font, fill=self.ink)
+                  if cursor and SHOW_CURSOR:
+                      cx = int(sg["x"] + d.textlength(prefix, font=self.font)) + 4
+                      d.rectangle([cx, ln["y"] + self.cur_top, cx + self.cur_w, ln["y"] + self.cur_bot], fill=self.ink)
+                  return img
+
+          # ------------------------------------------------------------------
+          # এনিমেটেড ক্লিপ: স্থির ব্যাকগ্রাউন্ড + আরবি (ফেড/স্লাইড ইন-আউট) + বাংলা টাইপরাইটার
+          # ------------------------------------------------------------------
+          def make_animated_clip(meta_name, audio_file, out_file, a_start=0.0, a_dur=None):
+              # meta_name: anim_layers/<meta_name>.json  (স্বাভাবিক আয়াত: 001002 | ভাঙা আয়াত: 001031_sA / 001031_sB)
+              # a_start/a_dur: অডিওর কোন অংশ ব্যবহার হবে (ভাঙা আয়াতের জন্য); না দিলে পুরো অডিও
+              meta_path = os.path.join(ANIM_DIR, meta_name + ".json")
+              if not os.path.isfile(meta_path):
+                  return False
+              with open(meta_path, encoding="utf-8") as f:
+                  meta = json.load(f)
+              if not meta.get("animated"):
+                  return False
+              base_jpg = os.path.join(ANIM_DIR, meta["base"])
+              ar_name  = meta.get("ar_png")
+              ar_png   = os.path.join(ANIM_DIR, ar_name) if ar_name else None
+              if not os.path.isfile(base_jpg):
+                  return False
+              if ar_png and not os.path.isfile(ar_png):
+                  return False
+
+              dur = a_dur if a_dur is not None else audio_duration(audio_file)
+              if dur < 1.5:
+                  print(f"[ANIM] {meta_name}: audio too short/unknown ({dur}s) -> fallback")
+                  return False
+
+              rend = TypeRenderer(meta["bn"]) if meta.get("bn") else None
+              n_ev = rend.n if rend else 0
+
+              # ---- সময়ের হিসাব ----
+              tr = min(TRANS, dur / 4.0)
+              use_fx = tr >= 0.05
+              if not use_fx:
+                  tr = 0.0
+              D0 = int(round(TYPE_DELAY * FPS))                       # শুরুতে কয়টা ফাঁকা ফ্রেম
+              avail = dur - TYPE_DELAY - tr - MIN_HOLD                # টাইপ করার জন্য হাতে থাকা সময়
+              type_dur = max(0.4, min(n_ev / TYPING_CPS, avail)) if n_ev else 0.0
+              F_type = max(1, int(round(type_dur * FPS))) if n_ev else 0
+              max_frames = int(dur * FPS) - D0 - 2
+              if F_type > max_frames:
+                  F_type = max(1, max_frames)
+              S = min(n_ev, F_type) if n_ev else 0                    # মোট টাইপিং ধাপ
+              bounds = [int(i * F_type / S + 0.5) for i in range(S + 1)] if S else [0]
+
+              # ---- ffmpeg ইনপুট (স্তর অনুযায়ী ইনডেক্স হিসাব হয়) ----
+              cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", base_jpg]
+              idx = 1
+              ar_idx = bn_idx = None
+              if ar_png:
+                  cmd += ["-i", ar_png]
+                  ar_idx = idx; idx += 1
+              if rend:
+                  cmd += ["-f", "rawvideo", "-pix_fmt", "rgba", "-video_size", f"{rend.w}x{rend.h}",
+                          "-framerate", str(FPS), "-i", "pipe:0"]
+                  bn_idx = idx; idx += 1
+              if a_start and a_start > 0:
+                  cmd += ["-ss", f"{a_start:.3f}"]
+              if a_dur is not None:
+                  cmd += ["-t", f"{a_dur:.3f}"]
+              cmd += ["-i", audio_file]
+              au_idx = idx
+
+              # ---- ffmpeg ফিল্টার ----
+              fade_in  = f",fade=t=in:st=0:d={tr:.3f}:alpha=1" if use_fx else ""
+              fade_out = f",fade=t=out:st={dur - tr:.3f}:d={tr:.3f}:alpha=1" if use_fx else ""
+              slide    = f"+{SLIDE_PX}*pow(1-min(t/{tr:.3f},1),2)" if use_fx else ""
+              parts = [f"[0:v]format=yuv420p,loop=loop=-1:size=1:start=0,fps={FPS}[bg]"]
+              last = "bg"
+              if ar_idx is not None:
+                  ax, ay = [int(v) for v in meta["ar_xy"]]
+                  parts.append(f"[{ar_idx}:v]format=yuva420p,loop=loop=-1:size=1:start=0,fps={FPS}{fade_in}{fade_out}[ar]")
+                  parts.append(f"[{last}][ar]overlay=x='{ax}{slide}':y={ay}[t1]")
+                  last = "t1"
+              if bn_idx is not None:
+                  bx, by = rend.rx0, rend.ry0
+                  parts.append(f"[{bn_idx}:v]format=yuva420p,tpad=stop=-1:stop_mode=clone{fade_in}{fade_out}[bn]")
+                  parts.append(f"[{last}][bn]overlay=x='{bx}{slide}':y={by}[t2]")
+                  last = "t2"
+              parts.append(f"[{last}]format=yuv420p[v]")
+              fg = ";".join(parts)
+
+              cmd += ["-filter_complex", fg,
+                      "-map", "[v]", "-map", f"{au_idx}:a",
+                      "-r", str(FPS),
+                      "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p",
+                      "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
+                      "-t", f"{dur:.3f}", out_file]
+
+              log_path = out_file + ".log"
+              ok = False
+              with open(log_path, "wb") as logf:
+                  if rend:
+                      p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=logf, stderr=logf)
+                      try:
+                          def put(img, count):
+                              b = img.tobytes()
+                              for _ in range(count):
+                                  p.stdin.write(b)
+
+                          put(rend.empty(), D0)                           # শুরুর ফাঁকা অংশ (ফেড-ইন চলছে)
+                          for i in range(S):
+                              e = min(rend.n, int(math.ceil((i + 1) * rend.n / S)))
+                              put(rend.frame(e, cursor=(i < S - 1)), bounds[i+1] - bounds[i])
+                          if S == 0:
+                              put(rend.empty(), 1)
+                          p.stdin.close()
+                      except (BrokenPipeError, OSError):
+                          pass
+                  else:
+                      p = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=logf, stderr=logf)
+                  p.wait()
+                  ok = (p.returncode == 0)
+
+              if not ok or not os.path.isfile(out_file) or os.path.getsize(out_file) == 0:
+                  try:
+                      with open(log_path, "rb") as lf:
+                          print(lf.read().decode("utf-8", "ignore")[-1500:])
+                  except Exception:
+                      pass
+                  if os.path.isfile(out_file):
+                      os.remove(out_file)
+                  return False
+              os.remove(log_path)
+              print(f"[ANIM] {meta_name}: dur={dur:.2f}s clusters={n_ev} steps={S} typing={F_type/FPS:.2f}s")
+              return True
+
+          # ------------------------------------------------------------------
+          # বড় আয়াত (split_ayahs): ভাগ ১ = শুধু আরবি (আরবি অডিওর দৈর্ঘ্য পর্যন্ত),
+          #                          ভাগ ২ = লেবেল + শুধু বাংলা (মার্জ করা অডিওর বাকি অংশ)
+          # দুটো ক্লিপ বানিয়ে জোড়া লাগিয়ে একটাই আয়াতের ক্লিপ বানানো হয়।
+          # কোনো কারণে (ফাইল/অডিও সমস্যা) না হলে False ফেরত দেয় -> স্বাভাবিক লেআউটে ফলব্যাক হয়।
+          # ------------------------------------------------------------------
+          def make_split_clip(base, audio_file, out_file):
+              mA = os.path.join(ANIM_DIR, base + "_sA.json")
+              mB = os.path.join(ANIM_DIR, base + "_sB.json")
+              if not (os.path.isfile(mA) and os.path.isfile(mB)):
+                  return False                                     # এই আয়াত split তালিকায় নেই
+              ayah = base[len(SURAH):]                             # 001031 -> 031
+              ar_audio = os.path.join("Audio", QARI_DIR, SURAH, ayah + ".mp3")   # শুধু আরবি অডিও (দৈর্ঘ্যের জন্য)
+              if not os.path.isfile(ar_audio):
+                  print(f"[SPLIT] {base}: আরবি অডিও পাওয়া যায়নি ({ar_audio}) -> স্বাভাবিক লেআউট")
+                  return False
+              total = audio_duration(audio_file)
+              ar_dur = audio_duration(ar_audio)
+              bn_dur = total - ar_dur
+              if ar_dur < 1.5 or bn_dur < 1.5:
+                  print(f"[SPLIT] {base}: বাংলা অডিও নেই/খুব ছোট (আরবি {ar_dur:.2f}s, মোট {total:.2f}s) -> স্বাভাবিক লেআউট")
+                  return False
+              print(f"[SPLIT] {base}: আরবি {ar_dur:.2f}s -> শুধু আরবি | বাংলা {bn_dur:.2f}s -> শুধু বাংলা")
+
+              partA = os.path.join(TEMP_IMG_DIR, base + "_A.mp4")
+              partB = os.path.join(TEMP_IMG_DIR, base + "_B.mp4")
+              lst   = os.path.join(TEMP_IMG_DIR, base + "_split_list.txt")
+              okA = make_animated_clip(base + "_sA", audio_file, partA, 0.0, ar_dur)
+              okB = okA and make_animated_clip(base + "_sB", audio_file, partB, ar_dur, bn_dur)
+              done = False
+              if okA and okB:
+                  with open(lst, "w", encoding="utf-8") as lf:
+                      lf.write(f"file '{os.path.abspath(partA)}'\nfile '{os.path.abspath(partB)}'\n")
+                  r = subprocess.run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                                      "-f", "concat", "-safe", "0", "-i", lst, "-c", "copy", out_file])
+                  done = (r.returncode == 0 and os.path.isfile(out_file) and os.path.getsize(out_file) > 0)
+              for tmp in (partA, partB, lst):
+                  if os.path.isfile(tmp):
+                      os.remove(tmp)
+              if not done and os.path.isfile(out_file):
+                  os.remove(out_file)
+              return done
+          # ------------------------------------------------------------------
+          # মূল লুপ: প্রতিটি আয়াতের ছবি + অডিও -> ভিডিও
+          # ------------------------------------------------------------------
+          pattern = os.path.join(IMG_DIR, f"{SURAH}*.jpg")
+          for p_img in sorted(glob.glob(pattern)):
+              base = os.path.splitext(os.path.basename(p_img))[0]
+              audio_file = os.path.join(AUDIO_SURAH_DIR, base[len(SURAH):] + ".mp3")   # base = 001002 -> 002.mp3
+              if not os.path.isfile(audio_file):
+                  print(f"Audio missing: {audio_file} - Skipping")
+                  continue
+              out_file = os.path.join(TEMP_VIDEO_DIR, base + ".mp4")
+              print(f"Processing: {base}.jpg -> {base}.mp4")
+
+              done = False
+              try:
+                  done = make_split_clip(base, audio_file, out_file)      # split_ayahs এর আয়াত: আগে আরবি, পরে বাংলা
+              except Exception as ex:
+                  print(f"[WARN] {base}: split failed ({ex}) -> normal layout fallback")
+                  done = False
+
+              if not done:
+                  try:
+                      done = make_animated_clip(base, audio_file, out_file)
+                  except Exception as ex:
+                      print(f"[WARN] {base}: animation failed ({ex}) -> static fallback")
+                      done = False
+
+              if not done:
+                  fixed = os.path.join(TEMP_IMG_DIR, base + ".jpg")
+                  make_canvas_fixed(p_img, fixed)
+                  make_static_clip(fixed, audio_file, out_file)
+          PY
+
+          if ! ls "$TEMP_VIDEO_DIR"/${SURAH}*.mp4 1> /dev/null 2>&1; then
+            echo "No videos found to merge for Surah $SURAH"
+            exit 1
+          fi
+
+          ls -1 "$TEMP_VIDEO_DIR"/${SURAH}*.mp4 | sort -V > video_list_raw.txt
+
+          # Concat demuxer দিয়ে হালকা merge (সব ভিডিও 3840x2160, re-encode লাগে না)
+          : > concat_list.txt
+          while read f; do
+            printf "file '%s'\n" "$(readlink -f "$f")" >> concat_list.txt
+          done < video_list_raw.txt
+
+          # ভিডিওর মেটাডাটা: অডিও MP3 এর ট্যাগের মতোই সব ফিল্ডে একই মান (METADATA_VALUE) বসানো হয়।
+          # আগের সব মেটাডাটা মুছে (-map_metadata -1) নতুন করে বসানো হয়, আর bitexact দিয়ে
+          # ffmpeg এর নিজের "Lavf" encoder ট্যাগও বাদ দেওয়া হয়।
+          ffmpeg -y -hide_banner -loglevel error \
+            -f concat -safe 0 -i concat_list.txt \
+            -map 0 -c copy \
+            -map_metadata -1 \
+            -fflags +bitexact -flags:v +bitexact -flags:a +bitexact \
+            -metadata title="$METADATA_VALUE" \
+            -metadata artist="$METADATA_VALUE" \
+            -metadata album="$METADATA_VALUE" \
+            -metadata album_artist="$METADATA_VALUE" \
+            -metadata composer="$METADATA_VALUE" \
+            -metadata genre="$METADATA_VALUE" \
+            -metadata comment="$METADATA_VALUE" \
+            "$FINAL_DIR/${SURAH}.mp4"
+
+          ls -lh "$FINAL_DIR"/
+          rm -rf "$TEMP_VIDEO_DIR" "$TEMP_IMG_DIR" video_list_raw.txt concat_list.txt
+
+
+      - name: Step 6 - Upload Final Video (4K)
+        if: ${{ inputs.run_video }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: Surah-${{ env.SURAH_PAD }}-${{ env.QARI_DIR }}-4K-Video
+          # শুধু এই রানের সূরার ভিডিও (ফোল্ডারে থাকা পুরনো সূরার ভিডিও আর artifact এ ঢুকবে না)
+          path: rizwanSurahVideo/${{ env.QARI_DIR }}/${{ env.SURAH_PAD }}.mp4
+
+
+      # =====================================================================
+      # ধাপ ৬ক: 4K ভিডিও থেকে HD (1920x1080) কপি — রিজোলিউশন কমানো হয় শুধু কপিতে
+      #          মূল 4K ফাইল অক্ষত থাকে। HD রিপোর ফোল্ডারে commit হবে না।
+      # =====================================================================
+      - name: Step 6a - Convert 4K to HD (1920x1080)
+        if: ${{ inputs.run_video && inputs.run_hd }}
+        env:
+          METADATA_VALUE: ${{ inputs.metadata_value }}
+        run: |
+          SRC="rizwanSurahVideo/${QARI_DIR}/${SURAH_PAD}.mp4"
+          HD_DIR="hd_videos"
+          HD_FILE="$HD_DIR/${SURAH_PAD}_HD.mp4"
+          mkdir -p "$HD_DIR"
+
+          if [ ! -f "$SRC" ]; then
+            echo "Error: 4K ভিডিও পাওয়া যায়নি: $SRC"
+            exit 1
+          fi
+
+          echo "Converting $SRC -> $HD_FILE (1920x1080)"
+          ffmpeg -y -hide_banner -loglevel error \
+            -i "$SRC" \
+            -vf "scale=1920:1080:flags=lanczos,format=yuv420p" \
+            -c:v libx264 -preset medium -crf 20 \
+            -c:a copy \
+            -movflags +faststart \
+            -map_metadata -1 \
+            -fflags +bitexact -flags:v +bitexact -flags:a +bitexact \
+            -metadata title="$METADATA_VALUE" \
+            -metadata artist="$METADATA_VALUE" \
+            -metadata album="$METADATA_VALUE" \
+            -metadata album_artist="$METADATA_VALUE" \
+            -metadata composer="$METADATA_VALUE" \
+            -metadata genre="$METADATA_VALUE" \
+            -metadata comment="$METADATA_VALUE" \
+            "$HD_FILE"
+
+          ls -lh "$HD_DIR"/
+
+
+      - name: Step 6a - Upload HD Video artifact
+        if: ${{ inputs.run_video && inputs.run_hd }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: Surah-${{ env.SURAH_PAD }}-${{ env.QARI_DIR }}-HD-Video
+          path: hd_videos/${{ env.SURAH_PAD }}_HD.mp4
+
+
+      # =====================================================================
+      # ধাপ ৬গ: শুধু 4K ভিডিও রিপোর ফোল্ডারে commit (HD যাবে না)
+      #          ফাইল ১০০ MB এর বেশি হলে Git LFS দিয়ে commit হবে, নইলে সাধারণ commit
+      # =====================================================================
+      - name: Step 6 - Commit 4K Video to Repo (>100MB হলে Git LFS)
+        if: ${{ inputs.run_video }}
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+          VIDEO="rizwanSurahVideo/${QARI_DIR}/${SURAH_PAD}.mp4"
+          LIMIT=104857600   # GitHub এর সীমা: 100 MiB
+
+          if [ ! -f "$VIDEO" ]; then
+            echo "Error: ভিডিও পাওয়া যায়নি: $VIDEO"
+            exit 1
+          fi
+
+          SIZE=$(stat -c%s "$VIDEO")
+          echo "Video size: $SIZE bytes ($(( SIZE / 1024 / 1024 )) MiB)"
+
+          if [ "$SIZE" -gt "$LIMIT" ]; then
+            echo "ফাইল 100 MiB এর বেশি -> Git LFS দিয়ে commit হচ্ছে"
+            git lfs install
+            git lfs track "$VIDEO"
+            git add .gitattributes
+          else
+            echo "ফাইল 100 MiB এর নিচে -> সাধারণ commit"
+          fi
+
+          git add -f "$VIDEO"
+          git commit -m "Added Surah $SURAH_PAD 4K Video ($QARI_DIR) - Fixed 3840x2160" || echo "No changes"
+          source "$RUNNER_TEMP/push_retry.sh"
+          push_retry || { echo "Push failed - Release/Artifact থেকে ভিডিও নিন"; exit 0; }
+
+
+      # =====================================================================
+      # ধাপ ৬খ: সূরার তথ্যসহ GitHub Release (4K + HD + থাম্বনেইল সংযুক্ত)
+      #          Release এ ফাইল ২ GB পর্যন্ত দেওয়া যায়, তাই ১০০ MB সীমার সমস্যা নেই
+      # =====================================================================
+      - name: Step 6b - Create GitHub Release (সূরার তথ্যসহ)
+        if: ${{ inputs.run_video && inputs.run_release }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARABIC_NAME: ${{ inputs.arabic_name }}
+          BANGLA_NAME: ${{ inputs.bangla_name }}
+          QARI: ${{ env.QARI_LABEL }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          TAG="surah-${SURAH_PAD}-${QARI_DIR}"   # ক্বারী অনুযায়ী আলাদা Release (একই সূরা অন্য ক্বারীতে করলে আগেরটা মুছবে না)
+          VIDEO_4K="rizwanSurahVideo/${QARI_DIR}/${SURAH_PAD}.mp4"
+          VIDEO_HD="hd_videos/${SURAH_PAD}_HD.mp4"
+          THUMB="thumbnail/${SURAH_NUM}.png"
+          TITLE="${BANGLA_NAME} (${SURAH_PAD}) - ${QARI_DIR}"
+
+          if [ ! -f "$VIDEO_4K" ]; then
+            echo "Error: 4K ভিডিও পাওয়া যায়নি: $VIDEO_4K"
+            exit 1
+          fi
+
+          # ভিডিওর দৈর্ঘ্য (মিনিট:সেকেন্ড) ও ফাইলের সাইজ
+          DUR=$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "$VIDEO_4K" | cut -d. -f1)
+          DUR_MIN=$(( DUR / 60 ))
+          DUR_SEC=$(( DUR % 60 ))
+          SIZE_4K=$(du -h "$VIDEO_4K" | cut -f1)
+
+          # রিলিজে যে ফাইলগুলো যাবে (নামে 4K/HD স্পষ্ট করে)
+          mkdir -p release_files
+          cp "$VIDEO_4K" "release_files/Surah-${SURAH_PAD}-4K.mp4"
+          ASSETS=("release_files/Surah-${SURAH_PAD}-4K.mp4")
+
+          HD_LINE=""
+          if [ -f "$VIDEO_HD" ]; then
+            cp "$VIDEO_HD" "release_files/Surah-${SURAH_PAD}-HD.mp4"
+            ASSETS+=("release_files/Surah-${SURAH_PAD}-HD.mp4")
+            SIZE_HD=$(du -h "$VIDEO_HD" | cut -f1)
+            HD_LINE="- **HD ভিডিও:** 1920x1080 (${SIZE_HD})"
+          fi
+
+          if [ -f "$THUMB" ]; then
+            cp "$THUMB" "release_files/Surah-${SURAH_PAD}-Thumbnail.png"
+            ASSETS+=("release_files/Surah-${SURAH_PAD}-Thumbnail.png")
+          fi
+
+          # রিলিজের বর্ণনা (সূরার তথ্য)
+          cat > release_notes.md <<EOF
+          ## ${BANGLA_NAME}
+
+          **${ARABIC_NAME}**
+
+          ### সূরার তথ্য
+          - **সূরার নম্বর:** ${SURAH_NUM_BN} (${SURAH_PAD})
+          - **আরবি নাম:** ${ARABIC_NAME}
+          - **বাংলা নাম:** ${BANGLA_NAME}
+          - **মোট আয়াত:** ${AYAH_COUNT_BN} (${AYAH_COUNT})
+          - **ক্বারী:** ${QARI}
+          - **অনুবাদ:** তরজুমায়ে কানযুল ঈমান
+          - **ভিডিওর দৈর্ঘ্য:** ${DUR_MIN} মিনিট ${DUR_SEC} সেকেন্ড
+
+          ### ডাউনলোড
+          - **4K ভিডিও:** 3840x2160 (${SIZE_4K})
+          ${HD_LINE}
+          EOF
+
+          # একই tag এর পুরনো রিলিজ থাকলে মুছে নতুন করে বানানো (আবার রান করলেও কাজ করবে)
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "পুরনো রিলিজ $TAG পাওয়া গেছে -> মুছে নতুন করে তৈরি হচ্ছে"
+            gh release delete "$TAG" --yes --cleanup-tag
+          fi
+
+          gh release create "$TAG" "${ASSETS[@]}" \
+            --target "$BRANCH" \
+            --title "$TITLE" \
+            --notes-file release_notes.md
+
+          echo "Release তৈরি হয়েছে: $TAG"
+          gh release view "$TAG" --json url -q .url
