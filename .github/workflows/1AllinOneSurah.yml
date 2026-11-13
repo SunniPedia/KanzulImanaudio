@@ -1,4 +1,4 @@
-name: 1All in one V2 Main Surah Full with Split Pipeline v2 (Bangla name 1-2 words = 1 line) - Download → Merge → Tags → Thumbnail → 4K Video
+name: 1All in one V2 Main Surah Full with Split Pipeline v2 (Bangla name 1-2 words = 1 line) - Download → Merge → Tags → Thumbnail → 4K Video → SRT
 
 # =====================================================================
 # ফোল্ডার স্ট্রাকচার (ক্বারী ও সূরা অনুযায়ী আলাদা):
@@ -33,6 +33,14 @@ name: 1All in one V2 Main Surah Full with Split Pipeline v2 (Bangla name 1-2 wor
 #     ভাগ ১ → শুধু আরবি আয়াত (আরবি অডিও যতক্ষণ বাজে ততক্ষণ; ফন্ট/ফিট লজিক আগের মতোই)
 #     ভাগ ২ → "কানযুল ঈমান থেকে অনুবাদ:" লেবেল সহ শুধু বাংলা (বাংলা অডিওর সময়; টাইপরাইটার আগের মতোই)
 #   তালিকায় না থাকা আয়াত আগের মতোই (আরবি + বাংলা একসাথে) থাকবে।
+# SRT সাবটাইটেল (run_srt / srt_only / srt_folder ইনপুট):
+#   srt/<qari>/001.srt                     ← ধাপ ৭: সূরার SRT (আরবি অডিও যতক্ষণ বাজে ততক্ষণ আরবি আয়াত, তারপর বাংলা অডিওর সময় বাংলা অনুবাদ)
+#   srt/<qari>/_timing/001.json            ← ভিডিও বানানোর সময় রেকর্ড করা প্রতিটি ক্লিপের আসল সময় (SRT এর সিঙ্ক নিখুঁত রাখতে)
+#   Release এ Surah-001.srt নামে সংযুক্ত হয় (run_release চালু থাকলে)
+#   srt_only = true → আগে তৈরি হয়ে যাওয়া সূরার জন্য শুধু SRT বানায়: ডাউনলোড/মার্জ/ট্যাগ/থাম্বনেইল/ভিডিও/HD সব বাদ।
+#     রিপোতে থাকা Audio/<qari>/<সূরা>/ + Audio/bangla/<সূরা>/data.json + rizwanaudio/<qari>/<সূরা>/ ব্যবহার হয়;
+#     আগের Release (surah-<সূরা>-<qari>) থাকলে তাতে SRT যোগ হয় (ভিডিও যেমন আছে তেমনই থাকে)।
+#     timing ফাইল না থাকলে (পুরনো সূরা) অডিওর দৈর্ঘ্য থেকে আনুমানিক সময় ধরা হয়।
 # =====================================================================
 
 on:
@@ -124,6 +132,16 @@ on:
         required: false
         default: true
         type: boolean
+      srt_folder:
+        description: 'SRT ফোল্ডারের রুট (ভেতরে <qari>/<সূরা>.srt হিসেবে থাকে, যেমন: srt/alafasy/001.srt)'
+        required: false
+        default: 'srt'
+        type: string
+      srt_only:
+        description: 'শুধু SRT বানান (আগে তৈরি হয়ে যাওয়া সূরার জন্য) — ডাউনলোড/মার্জ/ট্যাগ/থাম্বনেইল/ভিডিও/HD সব বাদ যাবে। আগের Release থাকলে তাতে SRT যোগ হবে'
+        required: false
+        default: false
+        type: boolean
 
       # ---------- কোন কোন ধাপ চালাবে (ইচ্ছা করলে বন্ধ করা যাবে) ----------
       run_download:
@@ -157,7 +175,12 @@ on:
         default: true
         type: boolean
       run_release:
-        description: 'ধাপ ৬খ: সূরার তথ্যসহ GitHub Release তৈরি (4K + HD ফাইল সংযুক্ত)'
+        description: 'ধাপ ৬খ: সূরার তথ্যসহ GitHub Release তৈরি (4K + HD + SRT ফাইল সংযুক্ত); srt_only হলে আগের Release এ শুধু SRT যোগ হয়'
+        required: false
+        default: true
+        type: boolean
+      run_srt:
+        description: 'ধাপ ৭: SRT সাবটাইটেল তৈরি (আরবি অংশের সময় আরবি, বাংলা অডিওর সময় বাংলা) — srt/<qari>/<সূরা>.srt'
         required: false
         default: true
         type: boolean
@@ -319,7 +342,7 @@ jobs:
 
 
       - name: Install Playwright + Chromium
-        if: ${{ inputs.run_thumbnail }}
+        if: ${{ (inputs.run_thumbnail && !inputs.srt_only) }}
         run: |
           pip install playwright
           playwright install --with-deps chromium
@@ -344,7 +367,7 @@ jobs:
       # ধাপ ৪: সূরা থাম্বনেইল তৈরি (সূরা নম্বর ইংরেজি থাকলেও বাংলায় রূপান্তর হবে)
       # =====================================================================
       - name: Step 4 - Generate thumbnail
-        if: ${{ inputs.run_thumbnail }}
+        if: ${{ (inputs.run_thumbnail && !inputs.srt_only) }}
         env:
           SURAH_AR: ${{ env.SURAH_AR_NAME }}
           SURAH_BN: ${{ env.SURAH_BN_NAME }}
@@ -486,7 +509,7 @@ jobs:
 
 
       - name: Step 4 - Upload thumbnail artifact
-        if: ${{ inputs.run_thumbnail }}
+        if: ${{ (inputs.run_thumbnail && !inputs.srt_only) }}
         uses: actions/upload-artifact@v4
         with:
           name: surah-thumbnail
@@ -494,7 +517,7 @@ jobs:
 
 
       - name: Step 4 - Commit thumbnail
-        if: ${{ inputs.run_thumbnail && inputs.commit_result }}
+        if: ${{ (inputs.run_thumbnail && !inputs.srt_only) && inputs.commit_result }}
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -508,7 +531,7 @@ jobs:
       # ধাপ ৫: আয়াতের ছবি (3840x2160) + এনিমেশন লেয়ার তৈরি
       # =====================================================================
       - name: Step 5 - Generate Fixed Images (3840x2160) + Animation Layers
-        if: ${{ inputs.run_video }}
+        if: ${{ (inputs.run_video && !inputs.srt_only) }}
         env:
           ARABIC_NAME: ${{ env.SURAH_AR_NAME }}
           BANGLA_NAME: ${{ env.SURAH_BN_NAME }}
@@ -1135,7 +1158,7 @@ jobs:
 
 
       - name: Step 5 - Upload ayah images artifact
-        if: ${{ inputs.run_video }}
+        if: ${{ (inputs.run_video && !inputs.srt_only) }}
         uses: actions/upload-artifact@v4
         with:
           name: ayah-images
@@ -1144,7 +1167,7 @@ jobs:
 
 
       - name: Step 5 - Push output images
-        if: ${{ inputs.run_video }}
+        if: ${{ (inputs.run_video && !inputs.srt_only) }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -1157,7 +1180,7 @@ jobs:
       #         নিচের pipeline job গুলো (প্রতি সোর্সের জন্য একটি) এখান থেকে নিয়ে নেবে
       # =====================================================================
       - name: Step 5 - Pack video inputs (anim layers + this surah images + thumbnail)
-        if: ${{ inputs.run_video }}
+        if: ${{ (inputs.run_video && !inputs.srt_only) }}
         env:
           IMAGE_FOLDER: ${{ inputs.image_folder }}
         run: |
@@ -1174,7 +1197,7 @@ jobs:
           du -sh video_inputs
 
       - name: Step 5 - Upload video inputs artifact (for pipeline jobs)
-        if: ${{ inputs.run_video }}
+        if: ${{ (inputs.run_video && !inputs.srt_only) }}
         uses: actions/upload-artifact@v4
         with:
           name: video-inputs
@@ -1338,7 +1361,7 @@ jobs:
 
 
       - name: Install FFmpeg
-        if: ${{ inputs.run_merge || inputs.run_video }}
+        if: ${{ (inputs.run_merge && !inputs.srt_only) || (inputs.run_video && !inputs.srt_only) || inputs.run_srt || inputs.srt_only }}
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
 
@@ -1381,7 +1404,7 @@ jobs:
       # ধাপ ১: Surah অডিও ডাউনলোড (Alafasy)
       # =====================================================================
       - name: Step 1 - Download Selected Surah
-        if: ${{ inputs.run_download }}
+        if: ${{ (inputs.run_download && !inputs.srt_only) }}
         env:
           QARI: ${{ inputs.qari }}
         run: |
@@ -1428,7 +1451,7 @@ jobs:
 
 
       - name: Step 1 - Copy Bismillah (000.mp3) from src/ (সূরা ১ ও ৯ বাদে)
-        if: ${{ inputs.run_download }}
+        if: ${{ (inputs.run_download && !inputs.srt_only) }}
         run: |
           DEST_DIR="Audio/${QARI_DIR}/${SURAH_PAD}"     # যেমন: Audio/alafasy/002/000.mp3
           mkdir -p "$DEST_DIR"
@@ -1453,7 +1476,7 @@ jobs:
 
 
       - name: Step 1 - Commit and Push Audio Files
-        if: ${{ inputs.run_download }}
+        if: ${{ (inputs.run_download && !inputs.srt_only) }}
         env:
           QARI: ${{ env.QARI_LABEL }}
         run: |
@@ -1469,7 +1492,7 @@ jobs:
       # ধাপ ২: Arabic + Bangla অডিও মার্জ (Rizwan)
       # =====================================================================
       - name: Step 2 - Merge Audios for Specific Surah
-        if: ${{ inputs.run_merge }}
+        if: ${{ (inputs.run_merge && !inputs.srt_only) }}
         env:
           AUDIO_FOLDER: ${{ inputs.audio_folder }}
         run: |
@@ -1510,7 +1533,7 @@ jobs:
 
 
       - name: Step 2 - Upload Artifact (Download from here)
-        if: ${{ inputs.run_merge }}
+        if: ${{ (inputs.run_merge && !inputs.srt_only) }}
         uses: actions/upload-artifact@v4
         with:
           name: rizwanaudio-${{ env.QARI_DIR }}-Surah-${{ env.SURAH_PAD }}
@@ -1518,7 +1541,7 @@ jobs:
 
 
       - name: Step 2 - Force Commit to Repo
-        if: ${{ inputs.run_merge }}
+        if: ${{ (inputs.run_merge && !inputs.srt_only) }}
         env:
           AUDIO_FOLDER: ${{ inputs.audio_folder }}
         run: |
@@ -1536,7 +1559,7 @@ jobs:
       # ধাপ ৩: MP3 ID3V1 + ID3V2 ট্যাগ ঠিক করা, LyricsTag ক্লিয়ার
       # =====================================================================
       - name: Step 3 - Fix ID3V1, ID3V2 and Clear LyricsTag
-        if: ${{ inputs.run_tags }}
+        if: ${{ (inputs.run_tags && !inputs.srt_only) }}
         env:
           FILE_PREFIX: ${{ env.SURAH_PAD }}
           METADATA_VALUE: ${{ inputs.metadata_value }}
@@ -1593,7 +1616,7 @@ jobs:
 
 
       - name: Step 3 - Commit & Push Tags
-        if: ${{ inputs.run_tags }}
+        if: ${{ (inputs.run_tags && !inputs.srt_only) }}
         env:
           AUDIO_FOLDER: ${{ inputs.audio_folder }}
         run: |
@@ -1612,14 +1635,14 @@ jobs:
       # ভিডিওর ইনপুট (prepare job থেকে): এনিমেশন লেয়ার + এই সূরার আয়াতের ছবি + থাম্বনেইল
       # =====================================================================
       - name: Step 6 - Download video inputs (from prepare job)
-        if: ${{ inputs.run_video }}
+        if: ${{ (inputs.run_video && !inputs.srt_only) }}
         uses: actions/download-artifact@v4
         with:
           name: video-inputs
           path: video_inputs
 
       - name: Step 6 - Place video inputs (anim layers, ayah images, thumbnail)
-        if: ${{ inputs.run_video }}
+        if: ${{ (inputs.run_video && !inputs.srt_only) }}
         env:
           IMAGE_FOLDER: ${{ inputs.image_folder }}
         run: |
@@ -1643,7 +1666,7 @@ jobs:
       # ধাপ ৬: এনিমেটেড আয়াত ভিডিও (টাইপরাইটার + ট্রানজিশন) → এক সূরার 4K ভিডিও
       # =====================================================================
       - name: Step 6 - Make Animated Ayat Videos (Typewriter + Transitions) and Merge to One Surah Video - 4K (3840x2160 fixed)
-        if: ${{ inputs.run_video }}
+        if: ${{ (inputs.run_video && !inputs.srt_only) }}
         env:
           IMG_DIR: ${{ inputs.image_folder }}
           AUDIO_DIR: ${{ inputs.audio_folder }}
@@ -1652,6 +1675,7 @@ jobs:
           TYPING_SPEED: ${{ inputs.typing_speed }}
           TRANSITION_SECONDS: ${{ inputs.transition_seconds }}
           METADATA_VALUE: ${{ inputs.metadata_value }}
+          TIMING_FILE: ${{ inputs.srt_folder }}/${{ env.QARI_DIR }}/_timing/${{ env.SURAH_PAD }}.json
         run: |
           TEMP_IMG_DIR="temp_${SURAH}_images_fixed"
           TEMP_VIDEO_DIR="temp_${SURAH}_videos"
@@ -1679,6 +1703,7 @@ jobs:
           TARGET_H       = int(os.environ.get("TARGET_H", "2160"))
           ANIM_DIR       = "anim_layers"
           FPS            = 30
+          TIMING         = {}      # SRT এর জন্য: প্রতিটি আয়াতের ক্লিপের আসল দৈর্ঘ্য (ভাঙা আয়াতে আরবি অংশের দৈর্ঘ্যও)
 
           def _num(name, default, lo, hi):
               try:
@@ -2006,6 +2031,8 @@ jobs:
                   r = subprocess.run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
                                       "-f", "concat", "-safe", "0", "-i", lst, "-c", "copy", out_file])
                   done = (r.returncode == 0 and os.path.isfile(out_file) and os.path.getsize(out_file) > 0)
+              if done:
+                  TIMING[base] = {"a": audio_duration(partA)}      # আরবি অংশের ক্লিপের আসল দৈর্ঘ্য (SRT এ আরবি/বাংলা ভাগের সীমানা)
               for tmp in (partA, partB, lst):
                   if os.path.isfile(tmp):
                       os.remove(tmp)
@@ -2043,6 +2070,17 @@ jobs:
                   fixed = os.path.join(TEMP_IMG_DIR, base + ".jpg")
                   make_canvas_fixed(p_img, fixed)
                   make_static_clip(fixed, audio_file, out_file)
+
+              if os.path.isfile(out_file):
+                  TIMING.setdefault(base, {})["total"] = audio_duration(out_file)   # ক্লিপের আসল দৈর্ঘ্য (ffprobe)
+
+          # SRT এর জন্য সময়ের তালিকা সেভ (সূরার ভিডিওর সাথেই মিলবে)
+          _tf = os.environ.get("TIMING_FILE", "").strip()
+          if _tf:
+              os.makedirs(os.path.dirname(_tf), exist_ok=True)
+              with open(_tf, "w", encoding="utf-8") as jf:
+                  json.dump(TIMING, jf, ensure_ascii=False, indent=1)
+              print(f"[SRT] clip timing saved: {_tf} ({len(TIMING)} clips)")
           PY
 
           if ! ls "$TEMP_VIDEO_DIR"/${SURAH}*.mp4 1> /dev/null 2>&1; then
@@ -2080,7 +2118,7 @@ jobs:
 
 
       - name: Step 6 - Upload Final Video (4K)
-        if: ${{ inputs.run_video }}
+        if: ${{ (inputs.run_video && !inputs.srt_only) }}
         uses: actions/upload-artifact@v4
         with:
           name: Surah-${{ env.SURAH_PAD }}-${{ env.QARI_DIR }}-4K-Video
@@ -2093,7 +2131,7 @@ jobs:
       #          মূল 4K ফাইল অক্ষত থাকে। HD রিপোর ফোল্ডারে commit হবে না।
       # =====================================================================
       - name: Step 6a - Convert 4K to HD (1920x1080)
-        if: ${{ inputs.run_video && inputs.run_hd }}
+        if: ${{ (inputs.run_video && !inputs.srt_only) && (inputs.run_hd && !inputs.srt_only) }}
         env:
           METADATA_VALUE: ${{ inputs.metadata_value }}
         run: |
@@ -2129,7 +2167,7 @@ jobs:
 
 
       - name: Step 6a - Upload HD Video artifact
-        if: ${{ inputs.run_video && inputs.run_hd }}
+        if: ${{ (inputs.run_video && !inputs.srt_only) && (inputs.run_hd && !inputs.srt_only) }}
         uses: actions/upload-artifact@v4
         with:
           name: Surah-${{ env.SURAH_PAD }}-${{ env.QARI_DIR }}-HD-Video
@@ -2141,7 +2179,7 @@ jobs:
       #          ফাইল ১০০ MB এর বেশি হলে Git LFS দিয়ে commit হবে, নইলে সাধারণ commit
       # =====================================================================
       - name: Step 6 - Commit 4K Video to Repo (>100MB হলে Git LFS)
-        if: ${{ inputs.run_video }}
+        if: ${{ (inputs.run_video && !inputs.srt_only) }}
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
@@ -2173,11 +2211,202 @@ jobs:
 
 
       # =====================================================================
+      # ধাপ ৭: SRT সাবটাইটেল (আরবি অডিওর সময় আরবি, বাংলা অডিওর সময় বাংলা) → srt/<qari>/<সূরা>.srt
+      #        srt_only = true হলে শুধু এই ধাপই চলে (আগে তৈরি হওয়া সূরার জন্য)
+      # =====================================================================
+      - name: Step 7 - Generate SRT (আরবি অংশে আরবি, বাংলা অডিওর সময় বাংলা)
+        if: ${{ inputs.run_srt || inputs.srt_only }}
+        env:
+          AUDIO_FOLDER: ${{ inputs.audio_folder }}
+          SRT_FOLDER: ${{ inputs.srt_folder }}
+        run: |
+          python3 << 'PY'
+          import os, re, json, math, subprocess, sys
+
+          SURAH      = os.environ["SURAH_PAD"]
+          QARI_DIR   = os.environ["QARI_DIR"]
+          AUDIO_ROOT = os.environ.get("AUDIO_FOLDER", "rizwanaudio").strip().strip("/") or "rizwanaudio"
+          SRT_ROOT   = os.environ.get("SRT_FOLDER", "srt").strip().strip("/") or "srt"
+          FPS        = 30
+          TO_EN      = str.maketrans("০১২৩৪৫৬৭৮৯", "0123456789")
+
+          DATA_PATH   = os.path.join("Audio", "bangla", SURAH, "data.json")          # আয়াতের টেক্সট (আরবি + বাংলা)
+          ARABIC_DIR  = os.path.join("Audio", QARI_DIR, SURAH)                       # শুধু আরবি অডিও (আরবি অংশের দৈর্ঘ্যের জন্য)
+          MERGED_DIR  = os.path.join(AUDIO_ROOT, QARI_DIR, SURAH)                    # মার্জ করা অডিও (আরবি + বাংলা)
+          SRT_DIR     = os.path.join(SRT_ROOT, QARI_DIR)                             # যেমন: srt/alafasy
+          TIMING_PATH = os.path.join(SRT_DIR, "_timing", SURAH + ".json")            # ভিডিও বানানোর সময় রেকর্ড করা ক্লিপের আসল সময়
+          SRT_PATH    = os.path.join(SRT_DIR, SURAH + ".srt")
+          VIDEO_PATH  = os.path.join("rizwanSurahVideo", QARI_DIR, SURAH + ".mp4")
+
+          if not os.path.isfile(DATA_PATH):
+              raise SystemExit(f"Error: {DATA_PATH} পাওয়া যায়নি। এই সূরার data.json টা Audio/bangla/{SURAH}/ ফোল্ডারে রাখুন")
+          if not os.path.isdir(MERGED_DIR):
+              raise SystemExit(f"Error: মার্জ করা অডিও ফোল্ডার পাওয়া যায়নি: {MERGED_DIR} (আগে এই সূরার মার্জ/ভিডিও রান করুন)")
+
+
+          def media_dur(path):
+              try:
+                  r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                                      "-of", "default=nw=1:nk=1", path], capture_output=True, text=True)
+                  return float(r.stdout.strip())
+              except Exception:
+                  return 0.0
+
+
+          def frame_round(x):
+              # ভিডিও ক্লিপ 30fps এ ফ্রেমের গুণিতকে শেষ হয় — timing ফাইল না থাকলে এই হিসাব ব্যবহার হয়
+              return math.ceil(x * FPS - 1e-6) / FPS
+
+
+          def srt_time(t):
+              ms = int(round(max(t, 0.0) * 1000))
+              h, ms = divmod(ms, 3600000)
+              m, ms = divmod(ms, 60000)
+              s, ms = divmod(ms, 1000)
+              return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+          def num(s):
+              m = re.search(r"\d+", str(s).translate(TO_EN))
+              return int(m.group()) if m else 0
+
+
+          def clean_bn(text):
+              text = re.sub(r"\s*\(\s*[0-9০-৯]+\s*\)", "", text)       # (১) ধরনের আয়াত নম্বর বাদ (ছবির লজিকের মতোই)
+              return re.sub(r"\s+", " ", text).strip()
+
+
+          def clean_ar(text):
+              return re.sub(r"\s+", " ", text).strip()
+
+
+          timing = {}
+          if os.path.isfile(TIMING_PATH):
+              with open(TIMING_PATH, encoding="utf-8") as f:
+                  timing = json.load(f)
+              print(f"Timing ফাইল পাওয়া গেছে (ভিডিওর আসল ক্লিপ-সময়): {TIMING_PATH} ({len(timing)} আয়াত)")
+          else:
+              print(f"::notice::Timing ফাইল নেই ({TIMING_PATH}) — অডিওর দৈর্ঘ্য থেকে আনুমানিক (ফ্রেম-রাউন্ড) সময় ধরা হচ্ছে")
+
+          with open(DATA_PATH, encoding="utf-8-sig") as f:
+              data = json.load(f)
+
+          items = sorted(((num(it.get("verses", "0")), it) for it in data), key=lambda x: x[0])
+
+          cues = []
+          t = 0.0
+          used = skipped = 0
+          for ayah, it in items:
+              fname = f"{ayah:03d}.mp3"
+              merged = os.path.join(MERGED_DIR, fname)
+              if not os.path.isfile(merged):
+                  print(f"Audio missing: {merged} - Skipping (ভিডিওতেও এই আয়াত বাদ)")
+                  skipped += 1
+                  continue
+              base = f"{SURAH}{ayah:03d}"
+              tm = timing.get(base, {})
+
+              total_audio = media_dur(merged)
+              clip_total = float(tm.get("total") or 0) or frame_round(total_audio)
+
+              ar_path = os.path.join(ARABIC_DIR, fname)
+              ar_dur = min(media_dur(ar_path), total_audio) if os.path.isfile(ar_path) else 0.0
+              split_len = float(tm.get("a") or 0)               # ভাঙা (split) আয়াতে আরবি অংশের ভিডিও-ক্লিপের আসল দৈর্ঘ্য
+              a_len = split_len if split_len > 0 else ar_dur
+
+              ar_text = clean_ar(str(it.get("names", "")))
+              bn_text = clean_bn(str(it.get("name", "")))
+
+              if a_len <= 0 or a_len >= clip_total - 0.05:
+                  # আলাদা করা যায়নি / বাংলা অডিও নেই -> পুরো সময় একটি এন্ট্রি
+                  text = ar_text if (a_len > 0 or not bn_text) else (ar_text + "\n" + bn_text).strip()
+                  if text:
+                      cues.append((t, t + clip_total, text))
+              else:
+                  if ar_text:
+                      cues.append((t, t + a_len, ar_text))          # আরবি অডিও যতক্ষণ বাজে ততক্ষণ আরবি
+                  if bn_text:
+                      cues.append((t + a_len, t + clip_total, bn_text))   # বাংলা অডিওর সময় বাংলা
+              t += clip_total
+              used += 1
+
+          if not cues:
+              raise SystemExit("Error: কোনো SRT এন্ট্রি তৈরি হয়নি (অডিও বা data.json চেক করুন)")
+
+          os.makedirs(SRT_DIR, exist_ok=True)
+          with open(SRT_PATH, "w", encoding="utf-8", newline="\n") as f:
+              for i, (a, b, text) in enumerate(cues, 1):
+                  f.write(f"{i}\n{srt_time(a)} --> {srt_time(b)}\n{text}\n\n")
+
+          print(f"SRT তৈরি: {SRT_PATH} | আয়াত {used} (বাদ {skipped}) | এন্ট্রি {len(cues)} | মোট {srt_time(t)}")
+          vd = media_dur(VIDEO_PATH) if os.path.isfile(VIDEO_PATH) else 0.0
+          if vd > 0:
+              print(f"4K ভিডিওর দৈর্ঘ্য {srt_time(vd)} | SRT এর শেষ {srt_time(t)} | পার্থক্য {abs(vd - t):.2f}s")
+
+          if os.environ.get("GITHUB_ENV"):
+              with open(os.environ["GITHUB_ENV"], "a") as f:
+                  f.write(f"SRT_FILE={SRT_PATH}\n")
+          PY
+
+
+      - name: Step 7 - Upload SRT artifact
+        if: ${{ inputs.run_srt || inputs.srt_only }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: Surah-${{ env.SURAH_PAD }}-${{ env.QARI_DIR }}-SRT
+          path: ${{ env.SRT_FILE }}
+
+
+      - name: Step 7 - Commit & Push SRT (ক্বারী ও সূরা অনুযায়ী ফোল্ডারে)
+        if: ${{ inputs.run_srt || inputs.srt_only }}
+        env:
+          SRT_FOLDER: ${{ inputs.srt_folder }}
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add -f "$SRT_FOLDER"/
+          if git diff --staged --quiet; then
+            echo "No changes"
+          else
+            git commit -m "Add SRT for Surah $SURAH_PAD ($QARI_DIR)"
+            source "$RUNNER_TEMP/push_retry.sh"
+            push_retry || echo "::warning::Push failed - SRT artifact/Release থেকে নিন"
+          fi
+
+
+      - name: Step 7 - Add SRT to existing Release (শুধু SRT মোডে)
+        if: ${{ inputs.srt_only && inputs.run_release }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="surah-${SURAH_PAD}-${QARI_DIR}"
+          if [ ! -f "$SRT_FILE" ]; then
+            echo "Error: SRT ফাইল পাওয়া যায়নি: $SRT_FILE"
+            exit 1
+          fi
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            mkdir -p release_files
+            cp "$SRT_FILE" "release_files/Surah-${SURAH_PAD}.srt"
+            gh release upload "$TAG" "release_files/Surah-${SURAH_PAD}.srt" --clobber
+            # রিলিজের বর্ণনায় সাবটাইটেলের লাইন না থাকলে যোগ করা
+            BODY=$(gh release view "$TAG" --json body -q .body)
+            if ! printf '%s' "$BODY" | grep -q "সাবটাইটেল"; then
+              printf '%s\n- **সাবটাইটেল:** SRT (আরবি অংশে আরবি, বাংলা অডিওর সময় বাংলা অনুবাদ)\n' "$BODY" > release_notes_new.md
+              gh release edit "$TAG" --notes-file release_notes_new.md
+            fi
+            echo "SRT যোগ হয়েছে: $TAG"
+            gh release view "$TAG" --json url -q .url
+          else
+            echo "::warning::Release $TAG পাওয়া যায়নি — SRT শুধু রিপোর ${SRT_FOLDER:-srt}/${QARI_DIR}/ ও Artifact এ আছে। (ভিডিও আগে তৈরি না থাকলে সাধারণ রান দিন)"
+          fi
+
+
+      # =====================================================================
       # ধাপ ৬খ: সূরার তথ্যসহ GitHub Release (4K + HD + থাম্বনেইল সংযুক্ত)
       #          Release এ ফাইল ২ GB পর্যন্ত দেওয়া যায়, তাই ১০০ MB সীমার সমস্যা নেই
       # =====================================================================
       - name: Step 6b - Create GitHub Release (সূরার তথ্যসহ)
-        if: ${{ inputs.run_video && inputs.run_release }}
+        if: ${{ (inputs.run_video && !inputs.srt_only) && (inputs.run_release && !inputs.srt_only) }}
         env:
           GH_TOKEN: ${{ github.token }}
           ARABIC_NAME: ${{ env.SURAH_AR_NAME }}
@@ -2220,6 +2449,13 @@ jobs:
             ASSETS+=("release_files/Surah-${SURAH_PAD}-Thumbnail.png")
           fi
 
+          SRT_LINE=""
+          if [ -n "${SRT_FILE:-}" ] && [ -f "$SRT_FILE" ]; then
+            cp "$SRT_FILE" "release_files/Surah-${SURAH_PAD}.srt"
+            ASSETS+=("release_files/Surah-${SURAH_PAD}.srt")
+            SRT_LINE="- **সাবটাইটেল:** SRT (আরবি অংশে আরবি, বাংলা অডিওর সময় বাংলা অনুবাদ)"
+          fi
+
           # রিলিজের বর্ণনা (সূরার তথ্য)
           cat > release_notes.md <<EOF
           ## ${BANGLA_NAME}
@@ -2238,6 +2474,7 @@ jobs:
           ### ডাউনলোড
           - **4K ভিডিও:** 3840x2160 (${SIZE_4K})
           ${HD_LINE}
+          ${SRT_LINE}
           EOF
 
           # একই tag এর পুরনো রিলিজ থাকলে মুছে নতুন করে বানানো (আবার রান করলেও কাজ করবে)
