@@ -35,9 +35,9 @@ name: 1All in one V2 Main Surah Full with Split Pipeline v2 (Bangla name 1-2 wor
 #   তালিকায় না থাকা আয়াত আগের মতোই (আরবি + বাংলা একসাথে) থাকবে।
 # SRT সাবটাইটেল (run_srt / srt_only / srt_folder ইনপুট):
 #   srt/<qari>/001.bn_IN.srt               ← ধাপ ৭: সূরার SRT (আরবি অডিও যতক্ষণ বাজে ততক্ষণ আরবি আয়াত, তারপর বাংলা অডিওর সময় বাংলা অনুবাদ)
-#                                            ফাইলের নামে ভাষার কোড থাকে (srt_lang ইনপুট, ডিফল্ট bn_IN) — Facebook এ আপলোডে "filename.en_US.srt" ফরম্যাট লাগে
+#                                            ফাইলের নামে ভাষার কোড থাকে (ফাইলের উপরের env: SRT_LANG, ডিফল্ট bn_IN) — Facebook এ আপলোডে "filename.en_US.srt" ফরম্যাট লাগে
 #   srt/<qari>/_timing/001.json            ← ভিডিও বানানোর সময় রেকর্ড করা প্রতিটি ক্লিপের আসল সময় (SRT এর সিঙ্ক নিখুঁত রাখতে)
-#   Release এ Surah-001.bn_IN.srt নামে সংযুক্ত হয় (run_release চালু থাকলে; কোড srt_lang অনুযায়ী বদলাবে)
+#   Release এ Surah-001.bn_IN.srt নামে সংযুক্ত হয় (run_release চালু থাকলে; কোড env: SRT_LANG অনুযায়ী বদলাবে)
 #   ওয়াকফ চিহ্ন (ج/ط/ۚ): আয়াতের ছবিতে এখন শব্দ ও চিহ্নের মাঝে স্পেস থাকে, তাই আর লেগে যায় না
 #   srt_only = true → আগে তৈরি হয়ে যাওয়া সূরার জন্য শুধু SRT বানায়: ডাউনলোড/মার্জ/ট্যাগ/থাম্বনেইল/ভিডিও/HD সব বাদ।
 #     রিপোতে থাকা Audio/<qari>/<সূরা>/ + Audio/bangla/<সূরা>/data.json + rizwanaudio/<qari>/<সূরা>/ ব্যবহার হয়;
@@ -139,11 +139,6 @@ on:
         required: false
         default: 'srt'
         type: string
-      srt_lang:
-        description: 'SRT ফাইলের নামে ভাষার কোড (Facebook এর জন্য filename.en_US.srt ফরম্যাট) — যেমন: bn_IN (বাংলা), ar_AR (আরবি), en_US (ইংরেজি)'
-        required: false
-        default: 'bn_IN'
-        type: string
       srt_only:
         description: 'শুধু SRT বানান (আগে তৈরি হয়ে যাওয়া সূরার জন্য) — ডাউনলোড/মার্জ/ট্যাগ/থাম্বনেইল/ভিডিও/HD সব বাদ যাবে। আগের Release থাকলে তাতে SRT যোগ হবে'
         required: false
@@ -194,6 +189,12 @@ on:
 
 permissions:
   contents: write
+
+# SRT ফাইলের নামের ভাষার কোড (Facebook এর ফরম্যাট: filename.en_US.srt)
+# GitHub এ workflow_dispatch এ সর্বোচ্চ ২৫টি ইনপুট চলে (ইতিমধ্যে ২৫টি), তাই এটা ইনপুট নয়, এখানে env হিসেবে রাখা হয়েছে।
+# বদলাতে চাইলে শুধু এই একটি লাইন বদলান — যেমন: bn_IN (বাংলা), ar_AR (আরবি), en_US (ইংরেজি)
+env:
+  SRT_LANG: bn_IN
 
 jobs:
   # =====================================================================
@@ -2227,7 +2228,6 @@ jobs:
         env:
           AUDIO_FOLDER: ${{ inputs.audio_folder }}
           SRT_FOLDER: ${{ inputs.srt_folder }}
-          SRT_LANG: ${{ inputs.srt_lang }}
         run: |
           python3 << 'PY'
           import os, re, json, math, subprocess, sys
@@ -2389,7 +2389,6 @@ jobs:
         if: ${{ inputs.srt_only && inputs.run_release }}
         env:
           GH_TOKEN: ${{ github.token }}
-          SRT_LANG: ${{ inputs.srt_lang }}
         run: |
           TAG="surah-${SURAH_PAD}-${QARI_DIR}"
           SRT_ASSET="Surah-${SURAH_PAD}.$(basename "$SRT_FILE" | sed -E 's/^[0-9]+\.//')"   # যেমন: Surah-053.bn_IN.srt (Facebook ফরম্যাট)
