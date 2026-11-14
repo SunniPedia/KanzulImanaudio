@@ -34,9 +34,11 @@ name: 1All in one V2 Main Surah Full with Split Pipeline v2 (Bangla name 1-2 wor
 #     ভাগ ২ → "কানযুল ঈমান থেকে অনুবাদ:" লেবেল সহ শুধু বাংলা (বাংলা অডিওর সময়; টাইপরাইটার আগের মতোই)
 #   তালিকায় না থাকা আয়াত আগের মতোই (আরবি + বাংলা একসাথে) থাকবে।
 # SRT সাবটাইটেল (run_srt / srt_only / srt_folder ইনপুট):
-#   srt/<qari>/001.srt                     ← ধাপ ৭: সূরার SRT (আরবি অডিও যতক্ষণ বাজে ততক্ষণ আরবি আয়াত, তারপর বাংলা অডিওর সময় বাংলা অনুবাদ)
+#   srt/<qari>/001.bn_IN.srt               ← ধাপ ৭: সূরার SRT (আরবি অডিও যতক্ষণ বাজে ততক্ষণ আরবি আয়াত, তারপর বাংলা অডিওর সময় বাংলা অনুবাদ)
+#                                            ফাইলের নামে ভাষার কোড থাকে (srt_lang ইনপুট, ডিফল্ট bn_IN) — Facebook এ আপলোডে "filename.en_US.srt" ফরম্যাট লাগে
 #   srt/<qari>/_timing/001.json            ← ভিডিও বানানোর সময় রেকর্ড করা প্রতিটি ক্লিপের আসল সময় (SRT এর সিঙ্ক নিখুঁত রাখতে)
-#   Release এ Surah-001.srt নামে সংযুক্ত হয় (run_release চালু থাকলে)
+#   Release এ Surah-001.bn_IN.srt নামে সংযুক্ত হয় (run_release চালু থাকলে; কোড srt_lang অনুযায়ী বদলাবে)
+#   ওয়াকফ চিহ্ন (ج/ط/ۚ): আয়াতের ছবিতে এখন শব্দ ও চিহ্নের মাঝে স্পেস থাকে, তাই আর লেগে যায় না
 #   srt_only = true → আগে তৈরি হয়ে যাওয়া সূরার জন্য শুধু SRT বানায়: ডাউনলোড/মার্জ/ট্যাগ/থাম্বনেইল/ভিডিও/HD সব বাদ।
 #     রিপোতে থাকা Audio/<qari>/<সূরা>/ + Audio/bangla/<সূরা>/data.json + rizwanaudio/<qari>/<সূরা>/ ব্যবহার হয়;
 #     আগের Release (surah-<সূরা>-<qari>) থাকলে তাতে SRT যোগ হয় (ভিডিও যেমন আছে তেমনই থাকে)।
@@ -133,9 +135,14 @@ on:
         default: true
         type: boolean
       srt_folder:
-        description: 'SRT ফোল্ডারের রুট (ভেতরে <qari>/<সূরা>.srt হিসেবে থাকে, যেমন: srt/alafasy/001.srt)'
+        description: 'SRT ফোল্ডারের রুট (ভেতরে <qari>/<সূরা>.<ভাষার কোড>.srt হিসেবে থাকে, যেমন: srt/alafasy/001.bn_IN.srt)'
         required: false
         default: 'srt'
+        type: string
+      srt_lang:
+        description: 'SRT ফাইলের নামে ভাষার কোড (Facebook এর জন্য filename.en_US.srt ফরম্যাট) — যেমন: bn_IN (বাংলা), ar_AR (আরবি), en_US (ইংরেজি)'
+        required: false
+        default: 'bn_IN'
         type: string
       srt_only:
         description: 'শুধু SRT বানান (আগে তৈরি হয়ে যাওয়া সূরার জন্য) — ডাউনলোড/মার্জ/ট্যাগ/থাম্বনেইল/ভিডিও/HD সব বাদ যাবে। আগের Release থাকলে তাতে SRT যোগ হবে'
@@ -608,14 +615,15 @@ jobs:
 
           def merge_marker_tokens(words):
               # স্পেস দিয়ে ভাঙা শব্দগুলোর মধ্যে যেগুলোতে কোনো আসল অক্ষর নেই (যেমন আয়াত নম্বরের
-              # গোল চিহ্ন/waqf mark), সেগুলো সবসময় আগের আসল শব্দের সাথে জোড়া লাগিয়ে দেওয়া হয়।
+              # গোল চিহ্ন/waqf mark), সেগুলো সবসময় আগের আসল শব্দের সাথে (মাঝে একটি স্পেস রেখে) জোড়া লাগিয়ে দেওয়া হয়।
+              # আগে স্পেস ছাড়া জোড়া হতো, ফলে ওয়াকফ চিহ্ন শব্দের শেষ অক্ষরের সাথে লেগে যেত — এখন ঠিক করা হয়েছে।
               # ফলে wrap হওয়ার সময় এই চিহ্নটা কখনোই একা নতুন লাইনে পড়বে না (একা পড়লেই এর
               # glyph shaping ভেঙে যায়/box আকারে দেখায়) — বরং শেষ শব্দের সাথেই এক টুকরো হয়ে
               # যেকোনো লাইনে যাবে, ফলে শেপিং সবসময় ঠিক থাকবে।
               merged=[]
               for w in words:
                   if merged and not has_arabic_letter(w):
-                      merged[-1] = merged[-1] + w
+                      merged[-1] = merged[-1] + " " + w   # স্পেস রেখে জোড়া: ওয়াকফ চিহ্ন (ج/ط/ۚ ইত্যাদি) শব্দের সাথে লেগে যাবে না, আবার আলাদা লাইনেও পড়বে না
                   else:
                       merged.append(w)
               return merged
@@ -2219,6 +2227,7 @@ jobs:
         env:
           AUDIO_FOLDER: ${{ inputs.audio_folder }}
           SRT_FOLDER: ${{ inputs.srt_folder }}
+          SRT_LANG: ${{ inputs.srt_lang }}
         run: |
           python3 << 'PY'
           import os, re, json, math, subprocess, sys
@@ -2235,7 +2244,9 @@ jobs:
           MERGED_DIR  = os.path.join(AUDIO_ROOT, QARI_DIR, SURAH)                    # মার্জ করা অডিও (আরবি + বাংলা)
           SRT_DIR     = os.path.join(SRT_ROOT, QARI_DIR)                             # যেমন: srt/alafasy
           TIMING_PATH = os.path.join(SRT_DIR, "_timing", SURAH + ".json")            # ভিডিও বানানোর সময় রেকর্ড করা ক্লিপের আসল সময়
-          SRT_PATH    = os.path.join(SRT_DIR, SURAH + ".srt")
+          # Facebook এর নিয়ম: filename.<ভাষার কোড>.srt (যেমন 001.bn_IN.srt) — না হলে "incorrect file name" এরর আসে
+          SRT_LANG    = re.sub(r"[^A-Za-z_-]", "", os.environ.get("SRT_LANG", "").strip()) or "bn_IN"
+          SRT_PATH    = os.path.join(SRT_DIR, f"{SURAH}.{SRT_LANG}.srt")
           VIDEO_PATH  = os.path.join("rizwanSurahVideo", QARI_DIR, SURAH + ".mp4")
 
           if not os.path.isfile(DATA_PATH):
@@ -2378,16 +2389,18 @@ jobs:
         if: ${{ inputs.srt_only && inputs.run_release }}
         env:
           GH_TOKEN: ${{ github.token }}
+          SRT_LANG: ${{ inputs.srt_lang }}
         run: |
           TAG="surah-${SURAH_PAD}-${QARI_DIR}"
+          SRT_ASSET="Surah-${SURAH_PAD}.$(basename "$SRT_FILE" | sed -E 's/^[0-9]+\.//')"   # যেমন: Surah-053.bn_IN.srt (Facebook ফরম্যাট)
           if [ ! -f "$SRT_FILE" ]; then
             echo "Error: SRT ফাইল পাওয়া যায়নি: $SRT_FILE"
             exit 1
           fi
           if gh release view "$TAG" > /dev/null 2>&1; then
             mkdir -p release_files
-            cp "$SRT_FILE" "release_files/Surah-${SURAH_PAD}.srt"
-            gh release upload "$TAG" "release_files/Surah-${SURAH_PAD}.srt" --clobber
+            cp "$SRT_FILE" "release_files/${SRT_ASSET}"
+            gh release upload "$TAG" "release_files/${SRT_ASSET}" --clobber
             # রিলিজের বর্ণনায় সাবটাইটেলের লাইন না থাকলে যোগ করা
             BODY=$(gh release view "$TAG" --json body -q .body)
             if ! printf '%s' "$BODY" | grep -q "সাবটাইটেল"; then
@@ -2451,8 +2464,9 @@ jobs:
 
           SRT_LINE=""
           if [ -n "${SRT_FILE:-}" ] && [ -f "$SRT_FILE" ]; then
-            cp "$SRT_FILE" "release_files/Surah-${SURAH_PAD}.srt"
-            ASSETS+=("release_files/Surah-${SURAH_PAD}.srt")
+            SRT_ASSET="Surah-${SURAH_PAD}.$(basename "$SRT_FILE" | sed -E 's/^[0-9]+\.//')"   # যেমন: Surah-053.bn_IN.srt (Facebook ফরম্যাট)
+            cp "$SRT_FILE" "release_files/${SRT_ASSET}"
+            ASSETS+=("release_files/${SRT_ASSET}")
             SRT_LINE="- **সাবটাইটেল:** SRT (আরবি অংশে আরবি, বাংলা অডিওর সময় বাংলা অনুবাদ)"
           fi
 
