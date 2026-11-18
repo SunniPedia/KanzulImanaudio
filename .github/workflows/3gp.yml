@@ -1,0 +1,532 @@
+name: Phone Video Convert (বাটন ফোনের জন্য 3GP / MP4) - rizwanSurahVideo → rizwanPhoneVideo/<qari>/<profile>/<সূরা>.3gp|mp4
+
+# =====================================================================
+# কাজ: GitHub এ থাকা সূরার ভিডিও (4K/HD) ছোট করে বাটন ফোনে চালানোর উপযোগী
+#      3GP বা MP4 বানায়। ফরম্যাট ও রেজোলিউশন workflow চালানোর সময় বেছে নেওয়া যায়।
+#
+#   ভিডিওর উৎস (video_from ইনপুট):
+#     release_hd → Release এর Surah-001-HD.mp4 (ডিফল্ট; দ্রুত, Git LFS এর bandwidth খরচ হয় না)
+#     release_4k → Release এর Surah-001-4K.mp4
+#     repo_4k    → রিপোর rizwanSurahVideo/<qari>/001.mp4 (Git LFS হলে সরাসরি LFS থেকে নেয়)
+#     বেছে নেওয়া উৎসে ফাইল না পেলে বাকি দুটো উৎস পরপর চেষ্টা করে।
+#
+#   আউটপুট : rizwanPhoneVideo/<qari>/<profile>/001.3gp  (বা .mp4)
+#     profile এর উদাহরণ: 3gp_320x240, mp4_480x270, 3gp_176x144_amr
+#   Release : ট্যাগ phone-<qari>-<profile>, ফাইলের নাম Surah-001-<profile>.<ext>
+#
+# ফরম্যাট:
+#   3gp → MPEG-4 ভিডিও + AAC (বা AMR) অডিও   (খুব পুরনো / সাধারণ বাটন ফোনের জন্য নিরাপদ)
+#   mp4 → H.264 Baseline + AAC অডিও           (নতুন বাটন ফোন, KaiOS, Itel/Nokia ধরনের ফোন)
+#
+# রেজোলিউশন (ভিডিওর অনুপাত ঠিক রেখে কালো পাশ যোগ করে ফিট করা হয়):
+#   176x144  → খুব পুরনো ফোন (QCIF)। লেখা অনেক ছোট দেখাবে
+#   320x240  → বেশিরভাগ বাটন ফোনের জন্য নিরাপদ (QVGA, ডিফল্ট)
+#   320x180  → 16:9, ছোট স্ক্রিন
+#   480x270  → 16:9, নতুন ফোন
+#   640x360  → 16:9, বড় স্ক্রিনের নতুন ফোন (সব ফোনে নাও চলতে পারে)
+#   ৪:৩ সাইজে (176x144, 320x240) ১৬:৯ ভিডিও ছোট হয়ে উপরে-নিচে কালো পাশ আসে।
+#
+# ডিফল্ট মান (fps / ভিডিও kbps / অডিও kbps ফাঁকা রাখলে রেজোলিউশন অনুযায়ী অটো):
+#   176x144 → 12 fps, 100k, 32k   | 320x240 → 15 fps, 220k, 48k
+#   320x180 → 15 fps, 200k, 48k   | 480x270 → 15 fps, 320k, 48k
+#   640x360 → 20 fps, 500k, 64k
+#
+# অডিও: aac (ডিফল্ট) বা amr (শুধু 3gp; খুব পুরনো ফোনে AAC না চললে। 8 kHz মনো, মান কম)
+#
+# surah_range ইনপুটের উদাহরণ:
+#   1-114        → সব সূরা
+#   5            → শুধু সূরা ৫
+#   1-3,9,36-40  → মিশ্র (কমা দিয়ে আলাদা; বাংলা সংখ্যাও চলবে)
+#
+# audio_source (আগের মতোই):
+#   both / everyayah / dawateislami  → ক্বারী ফোল্ডার alafasy ও dawateislami (বা আপনার দেওয়া নাম)
+#
+# সংরক্ষণ: commit_result (রিপোতে, ১০০ MB এর বেশি হলে Git LFS) / upload_release (Release এ) /
+#          upload_artifact (Actions Artifact)। অন্তত একটি চালু থাকতে হবে।
+# সময়: লম্বা সূরা (যেমন বাকারা) 4K থেকে করতে অনেক সময় লাগে। বেশি সূরা হলে রেঞ্জ ভাগ করে চালান
+#       (একটি job এর সর্বোচ্চ সময় ৬ ঘণ্টা)।
+# যে সূরার ভিডিও পাওয়া যায় না সেটি বাদ যায় (warning সহ), বাকিগুলো চলে।
+# =====================================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      surah_range:
+        description: 'সূরার রেঞ্জ — যেমন: 1-114 (সব), 5 (একটি), 1-3,9,36-40 (মিশ্র)। বাংলা সংখ্যাও চলবে'
+        required: true
+        default: '1'
+        type: string
+      video_format:
+        description: 'আউটপুট ফরম্যাট: 3gp = পুরনো/সাধারণ বাটন ফোন, mp4 = নতুন বাটন ফোন (H.264 Baseline)'
+        required: true
+        default: '3gp'
+        type: choice
+        options:
+          - 3gp
+          - mp4
+      resolution:
+        description: 'রেজোলিউশন: 320x240 = নিরাপদ (ডিফল্ট), 176x144 = খুব পুরনো ফোন, 320x180 / 480x270 / 640x360 = 16:9 (নতুন ফোন)'
+        required: true
+        default: '320x240'
+        type: choice
+        options:
+          - '176x144'
+          - '320x240'
+          - '320x180'
+          - '480x270'
+          - '640x360'
+      audio_mode:
+        description: 'অডিও কোডেক: aac (ডিফল্ট) বা amr (শুধু 3gp; খুব পুরনো ফোনে AAC না চললে)'
+        required: false
+        default: 'aac'
+        type: choice
+        options:
+          - aac
+          - amr
+      video_from:
+        description: 'কোথা থেকে ভিডিও নেবে: release_hd (দ্রুত, ডিফল্ট) , release_4k , repo_4k (রিপোর rizwanSurahVideo)। না পেলে বাকিগুলো চেষ্টা করবে'
+        required: false
+        default: 'release_hd'
+        type: choice
+        options:
+          - release_hd
+          - release_4k
+          - repo_4k
+      audio_source:
+        description: 'কোন সোর্সের ভিডিও: both = দুটোই (সমান্তরালে) , everyayah , dawateislami'
+        required: false
+        default: 'both'
+        type: choice
+        options:
+          - both
+          - everyayah
+          - dawateislami
+      qari_folder:
+        description: 'everyayah এর ক্বারী ফোল্ডারের নাম (ফাঁকা = alafasy)'
+        required: false
+        default: ''
+        type: string
+      dawateislami_folder:
+        description: 'dawateislami এর ফোল্ডারের নাম (ফাঁকা = dawateislami)'
+        required: false
+        default: ''
+        type: string
+      video_folder:
+        description: 'রিপোর ভিডিও ফোল্ডারের রুট (repo_4k এর জন্য; ভেতরে <qari>/<সূরা>.mp4)'
+        required: false
+        default: 'rizwanSurahVideo'
+        type: string
+      output_folder:
+        description: 'আউটপুট ফোল্ডারের রুট (ভেতরে <qari>/<profile>/<সূরা>.3gp|mp4)'
+        required: false
+        default: 'rizwanPhoneVideo'
+        type: string
+      fps:
+        description: 'ফ্রেম রেট (ঐচ্ছিক, 5-30) — ফাঁকা = রেজোলিউশন অনুযায়ী অটো'
+        required: false
+        default: ''
+        type: string
+      video_kbps:
+        description: 'ভিডিও বিটরেট kbps (ঐচ্ছিক, 30-2000) — ফাঁকা = রেজোলিউশন অনুযায়ী অটো'
+        required: false
+        default: ''
+        type: string
+      audio_kbps:
+        description: 'অডিও বিটরেট kbps (ঐচ্ছিক, AAC এর জন্য, 8-128) — ফাঁকা = অটো'
+        required: false
+        default: ''
+        type: string
+      commit_result:
+        description: 'রিপোজিটরিতে commit করবেন? (১০০ MB এর বেশি হলে Git LFS)'
+        required: false
+        default: true
+        type: boolean
+      upload_release:
+        description: 'GitHub Release এ আপলোড করবেন? (ট্যাগ: phone-<qari>-<profile>)'
+        required: false
+        default: true
+        type: boolean
+      upload_artifact:
+        description: 'Actions Artifact হিসেবেও আপলোড করবেন? (৩ দিন থাকবে)'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  # =====================================================================
+  # Job ১: কোন কোন সোর্স চলবে তার তালিকা (matrix এর জন্য)
+  # =====================================================================
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      sources: ${{ steps.src.outputs.sources }}
+    steps:
+      - name: Decide audio sources (both / everyayah / dawateislami)
+        id: src
+        env:
+          AUDIO_SOURCE: ${{ inputs.audio_source }}
+        run: |
+          case "$AUDIO_SOURCE" in
+            everyayah)    echo 'sources=["everyayah"]' >> "$GITHUB_OUTPUT" ;;
+            dawateislami) echo 'sources=["dawateislami"]' >> "$GITHUB_OUTPUT" ;;
+            *)            echo 'sources=["everyayah","dawateislami"]' >> "$GITHUB_OUTPUT" ;;
+          esac
+          cat "$GITHUB_OUTPUT"
+
+  # =====================================================================
+  # Job ২: প্রতিটি সোর্সের জন্য আলাদা job (সমান্তরালে)
+  # =====================================================================
+  convert:
+    name: Phone Video (${{ matrix.source }})
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    permissions:
+      contents: write
+    env:
+      BRANCH: ${{ github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+      GIT_LFS_SKIP_SMUDGE: '1'      # checkout/pull এ LFS ফাইল নামাবে না (দরকারমতো শুধু একটি করে আনা হবে)
+    strategy:
+      fail-fast: false
+      matrix:
+        source: ${{ fromJSON(needs.prepare.outputs.sources) }}
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+
+
+      # -------------------------------------------------------------
+      # ইনপুট যাচাই: সূরার রেঞ্জ, ক্বারী ফোল্ডার, ফরম্যাট/রেজোলিউশন সেটিংস
+      # -------------------------------------------------------------
+      - name: Normalize inputs (surah range, qari folder, format settings)
+        env:
+          RANGE_INPUT: ${{ inputs.surah_range }}
+          AUDIO_SOURCE: ${{ matrix.source }}
+          QARI_FOLDER: ${{ inputs.qari_folder }}
+          DAWAT_FOLDER: ${{ inputs.dawateislami_folder }}
+          VIDEO_FOLDER: ${{ inputs.video_folder }}
+          OUTPUT_FOLDER: ${{ inputs.output_folder }}
+          VIDEO_FORMAT: ${{ inputs.video_format }}
+          RESOLUTION: ${{ inputs.resolution }}
+          AUDIO_MODE: ${{ inputs.audio_mode }}
+          FPS_IN: ${{ inputs.fps }}
+          VK_IN: ${{ inputs.video_kbps }}
+          AK_IN: ${{ inputs.audio_kbps }}
+          COMMIT_RESULT: ${{ inputs.commit_result }}
+          UPLOAD_RELEASE: ${{ inputs.upload_release }}
+          UPLOAD_ARTIFACT: ${{ inputs.upload_artifact }}
+        run: |
+          python3 << 'PY'
+          import os, re, sys
+
+          BN = str.maketrans("০১২৩৪৫৬৭৮৯", "0123456789")
+
+          # ---- অন্তত একটি সংরক্ষণ পদ্ধতি ----
+          if not any(os.environ.get(k) == "true" for k in ("COMMIT_RESULT", "UPLOAD_RELEASE", "UPLOAD_ARTIFACT")):
+              print("Error: commit_result / upload_release / upload_artifact এর অন্তত একটি চালু রাখুন (নইলে ফাইল কোথাও যাবে না)")
+              sys.exit(1)
+
+          # ---- সূরার রেঞ্জ ----
+          raw = os.environ.get("RANGE_INPUT", "").strip().translate(BN)
+          nums = set()
+          for m in re.finditer(r"(\d+)\s*(?:-|–|—|to)\s*(\d+)|(\d+)", raw):
+              if m.group(3):
+                  nums.add(int(m.group(3)))
+              else:
+                  a, b = int(m.group(1)), int(m.group(2))
+                  if a > b:
+                      a, b = b, a
+                  nums.update(range(a, b + 1))
+          if not nums:
+              print("Error: surah_range এ অন্তত একটি সংখ্যা দিন (যেমন: 1-114)")
+              sys.exit(1)
+          bad = [n for n in sorted(nums) if n < 1 or n > 114]
+          if bad:
+              print(f"Error: সূরার নম্বর ১ থেকে ১১৪ এর মধ্যে হতে হবে। ভুল: {bad}")
+              sys.exit(1)
+          with open("surah_list.txt", "w") as f:
+              for n in sorted(nums):
+                  f.write(f"{n:03d}\n")
+          print(f"মোট {len(nums)}টি সূরা প্রসেস হবে: {sorted(nums)[:5]}{' ...' if len(nums) > 5 else ''}")
+
+          # ---- ক্বারী ফোল্ডার ----
+          source = os.environ["AUDIO_SOURCE"].strip()
+          folder_in = os.environ.get("DAWAT_FOLDER", "") if source == "dawateislami" else os.environ.get("QARI_FOLDER", "")
+          qari_dir = folder_in.strip().strip("/") or ("dawateislami" if source == "dawateislami" else "alafasy")
+          if not re.fullmatch(r"[A-Za-z0-9._-]+", qari_dir) or qari_dir in (".", ".."):
+              print("Error: ক্বারী ফোল্ডারের নামে শুধু ইংরেজি অক্ষর, সংখ্যা, '.', '_' ও '-' চলবে")
+              sys.exit(1)
+
+          def clean_root(v, default):
+              v = (v or "").strip().strip("/") or default
+              if not re.fullmatch(r"[A-Za-z0-9._/-]+", v) or ".." in v:
+                  print(f"Error: ফোল্ডারের নাম ঠিক নয়: {v}")
+                  sys.exit(1)
+              return v
+
+          video_root = clean_root(os.environ.get("VIDEO_FOLDER"), "rizwanSurahVideo")
+          out_root = clean_root(os.environ.get("OUTPUT_FOLDER"), "rizwanPhoneVideo")
+
+          # ---- ফরম্যাট / রেজোলিউশন সেটিংস ----
+          PRESETS = {
+              "176x144": dict(fps=12, vk=100, ak=32, level="1.1"),
+              "320x240": dict(fps=15, vk=220, ak=48, level="1.3"),
+              "320x180": dict(fps=15, vk=200, ak=48, level="1.3"),
+              "480x270": dict(fps=15, vk=320, ak=48, level="2.1"),
+              "640x360": dict(fps=20, vk=500, ak=64, level="3.0"),
+          }
+          fmt = os.environ["VIDEO_FORMAT"].strip().lower()
+          res = os.environ["RESOLUTION"].strip().lower()
+          audio = os.environ["AUDIO_MODE"].strip().lower()
+          if fmt not in ("3gp", "mp4"):
+              print("Error: video_format 3gp বা mp4 হতে হবে"); sys.exit(1)
+          if res not in PRESETS:
+              print(f"Error: রেজোলিউশন ঠিক নয়: {res}"); sys.exit(1)
+          if audio not in ("aac", "amr"):
+              print("Error: audio_mode aac বা amr হতে হবে"); sys.exit(1)
+          if audio == "amr" and fmt != "3gp":
+              print("::warning::AMR শুধু 3gp এর সাথে ব্যবহার হয়; mp4 তে AAC ব্যবহার হবে")
+              audio = "aac"
+
+          def num(name, default, lo, hi):
+              v = os.environ.get(name, "").strip().translate(BN)
+              if not v:
+                  return default
+              if not v.isdigit() or not (lo <= int(v) <= hi):
+                  print(f"Error: {name} এর মান {lo}-{hi} এর মধ্যে সংখ্যা হতে হবে (দেওয়া হয়েছে: {v})")
+                  sys.exit(1)
+              return int(v)
+
+          p = PRESETS[res]
+          fps = num("FPS_IN", p["fps"], 5, 30)
+          vk = num("VK_IN", p["vk"], 30, 2000)
+          ak = num("AK_IN", p["ak"], 8, 128)
+          w, h = (int(x) for x in res.split("x"))
+          ar = 22050 if w <= 320 else 44100
+          profile = f"{fmt}_{res}" + ("_amr" if audio == "amr" else "")
+
+          print(f"Source: {source} | Qari: {qari_dir} | Input: {video_root}/{qari_dir} | Output: {out_root}/{qari_dir}/{profile}")
+          print(f"Format: {fmt} | {w}x{h} | {fps} fps | video {vk}k | audio {audio}" + (f" {ak}k @ {ar}Hz" if audio == "aac" else " (8 kHz mono)"))
+
+          with open(os.environ["GITHUB_ENV"], "a") as f:
+              f.write(f"QARI_DIR={qari_dir}\n")
+              f.write(f"VIDEO_ROOT={video_root}\n")
+              f.write(f"OUT_ROOT={out_root}\n")
+              f.write(f"EXT={fmt}\n")
+              f.write(f"W={w}\nH={h}\n")
+              f.write(f"FPS={fps}\nVK={vk}\nAK={ak}\nAR={ar}\n")
+              f.write(f"LEVEL={p['level']}\n")
+              f.write(f"AUDIO={audio}\n")
+              f.write(f"PROFILE={profile}\n")
+          PY
+
+
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update && sudo apt-get install -y ffmpeg
+          ffmpeg -hide_banner -version | head -n 1
+          if [ "$AUDIO" = "amr" ] && ! ffmpeg -hide_banner -encoders 2>/dev/null | grep -q libopencore_amrnb; then
+            echo "Error: এই ffmpeg এ AMR এনকোডার (libopencore_amrnb) নেই। audio_mode = aac দিয়ে চালান"
+            exit 1
+          fi
+
+
+      # দুই job একসাথে push করলে conflict এড়াতে retry সহায়ক (.gitattributes এ LFS লাইন merge=union)
+      - name: Prepare push helper (parallel push retry)
+        run: |
+          cat > "$RUNNER_TEMP/push_retry.sh" << 'SH'
+          push_retry() {
+            for i in 1 2 3 4 5 6; do
+              git pull --rebase --autostash origin "$BRANCH" || git rebase --abort || true
+              if git push; then
+                return 0
+              fi
+              echo "push failed (attempt $i) - retrying"
+              sleep $(( (RANDOM % 8) + 3 ))
+            done
+            return 1
+          }
+          SH
+          echo ".gitattributes merge=union" >> .git/info/attributes
+          git lfs install --local || true
+
+
+      # -------------------------------------------------------------
+      # প্রতিটি সূরা: ভিডিও সংগ্রহ → কনভার্ট → (commit / Release)
+      # -------------------------------------------------------------
+      - name: Convert surah videos for phone (3GP / MP4)
+        env:
+          VIDEO_FROM: ${{ inputs.video_from }}
+          COMMIT_RESULT: ${{ inputs.commit_result }}
+          UPLOAD_RELEASE: ${{ inputs.upload_release }}
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          source "$RUNNER_TEMP/push_retry.sh"
+
+          LIMIT=104857600          # GitHub এর সীমা: 100 MiB
+          OUT_DIR="${OUT_ROOT}/${QARI_DIR}/${PROFILE}"
+          STAGE="phone_stage"
+          WORK="$RUNNER_TEMP/src_dl"
+          REL_TAG="phone-${QARI_DIR}-${PROFILE}"
+          mkdir -p "$OUT_DIR" "$STAGE" "$WORK"
+
+          # --- সূরার ভিডিও খুঁজে আনা: SRC (ফাইলের পথ), SRC_TMP (কাজ শেষে মুছবে), SRC_KIND ---
+          get_source() {
+            local pad="$1" tag="surah-${1}-${QARI_DIR}" order kind f oid obj suffix
+            SRC=""; SRC_TMP=""; SRC_KIND=""
+            case "$VIDEO_FROM" in
+              release_hd) order="release_hd release_4k repo_4k" ;;
+              release_4k) order="release_4k release_hd repo_4k" ;;
+              *)          order="repo_4k release_hd release_4k" ;;
+            esac
+            for kind in $order; do
+              case "$kind" in
+                release_hd|release_4k)
+                  suffix="HD"; [ "$kind" = "release_4k" ] && suffix="4K"
+                  f="${WORK}/Surah-${pad}-${suffix}.mp4"
+                  rm -f "$f"
+                  if gh release download "$tag" -p "Surah-${pad}-${suffix}.mp4" -D "$WORK" --clobber >/dev/null 2>&1 && [ -s "$f" ]; then
+                    SRC="$f"; SRC_TMP="$f"; SRC_KIND="$kind"
+                    return 0
+                  fi
+                  ;;
+                repo_4k)
+                  f="${VIDEO_ROOT}/${QARI_DIR}/${pad}.mp4"
+                  if [ -f "$f" ]; then
+                    if head -c 200 "$f" | grep -aq "git-lfs.github.com"; then
+                      # Git LFS পয়েন্টার -> শুধু এই একটি ফাইল LFS থেকে আনা (working tree তে কপি হয় না)
+                      oid=$(sed -n 's/^oid sha256://p' "$f" | head -n 1)
+                      if [ -n "$oid" ] && git lfs fetch --include="$f" >/dev/null 2>&1; then
+                        obj=".git/lfs/objects/${oid:0:2}/${oid:2:2}/${oid}"
+                        if [ -s "$obj" ]; then
+                          SRC="$obj"; SRC_TMP="$obj"; SRC_KIND="$kind (LFS)"
+                          return 0
+                        fi
+                      fi
+                    else
+                      SRC="$f"; SRC_KIND="$kind"
+                      return 0
+                    fi
+                  fi
+                  ;;
+              esac
+            done
+            return 1
+          }
+
+          # --- ffmpeg কনভার্ট ---
+          convert() {
+            local src="$1" out="$2"
+            local vf="scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps=${FPS}"
+            local gop=$(( FPS * 5 ))
+            local maxr=$(( VK * 12 / 10 ))
+            local buf=$(( VK * 2 ))
+            local -a vopts aopts fmtopt
+
+            if [ "$EXT" = "mp4" ]; then
+              vopts=(-c:v libx264 -profile:v baseline -level "$LEVEL" -pix_fmt yuv420p -preset medium
+                     -b:v "${VK}k" -maxrate "${maxr}k" -bufsize "${buf}k" -g "$gop")
+              fmtopt=(-f mp4)
+            else
+              vopts=(-c:v mpeg4 -pix_fmt yuv420p
+                     -b:v "${VK}k" -maxrate "${maxr}k" -bufsize "${buf}k" -g "$gop")
+              fmtopt=(-f 3gp)
+            fi
+
+            if [ "$AUDIO" = "amr" ]; then
+              aopts=(-c:a libopencore_amrnb -ar 8000 -ac 1 -b:a 12200)
+            else
+              aopts=(-c:a aac -b:a "${AK}k" -ac 1 -ar "$AR")
+            fi
+
+            ffmpeg -nostdin -y -hide_banner -loglevel error \
+              -i "$src" -map 0:v:0 -map 0:a:0 \
+              -vf "$vf" "${vopts[@]}" "${aopts[@]}" \
+              -map_metadata -1 -movflags +faststart "${fmtopt[@]}" "$out"
+          }
+
+          made=0; skipped=0; since_push=0
+
+          while read -r PAD <&3; do
+            OUT="${OUT_DIR}/${PAD}.${EXT}"
+            ASSET="${STAGE}/Surah-${PAD}-${PROFILE}.${EXT}"
+
+            if ! get_source "$PAD"; then
+              echo "::warning::সূরা ${PAD}: ভিডিও পাওয়া যায়নি (Release surah-${PAD}-${QARI_DIR} বা ${VIDEO_ROOT}/${QARI_DIR}/${PAD}.mp4) — বাদ"
+              skipped=$((skipped+1))
+              continue
+            fi
+
+            echo "সূরা ${PAD}: সোর্স = ${SRC_KIND} ($(du -h "$SRC" | cut -f1)) -> ${OUT}"
+            rm -f "$OUT" "$ASSET"
+            if ! convert "$SRC" "$OUT" || [ ! -s "$OUT" ]; then
+              echo "Error: সূরা ${PAD} কনভার্ট হয়নি"
+              if [ -n "$SRC_TMP" ]; then rm -f "$SRC_TMP"; fi
+              exit 1
+            fi
+            if [ -n "$SRC_TMP" ]; then rm -f "$SRC_TMP"; fi   # জায়গা বাঁচাতে সোর্স মুছে ফেলা
+
+            SIZE=$(stat -c%s "$OUT")
+            DUR=$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "$OUT" | cut -d. -f1)
+            echo "সূরা ${PAD} তৈরি: $(du -h "$OUT" | cut -f1) | ${DUR:-0} সেকেন্ড | ${PROFILE}"
+            made=$((made+1))
+
+            ln -f "$OUT" "$ASSET" 2>/dev/null || cp "$OUT" "$ASSET"
+
+            # --- Release এ আপলোড ---
+            if [ "$UPLOAD_RELEASE" = "true" ]; then
+              if ! gh release view "$REL_TAG" >/dev/null 2>&1; then
+                gh release create "$REL_TAG" --target "$BRANCH" \
+                  --title "Phone videos - ${QARI_DIR} - ${PROFILE}" \
+                  --notes "বাটন ফোনের জন্য ছোট ভিডিও (${PROFILE}) — ক্বারী: ${QARI_DIR}" \
+                  || echo "::warning::Release তৈরি হয়নি: $REL_TAG"
+              fi
+              gh release upload "$REL_TAG" "$ASSET" --clobber \
+                || echo "::warning::সূরা ${PAD} Release এ আপলোড হয়নি"
+            fi
+
+            # --- রিপোতে commit ---
+            if [ "$COMMIT_RESULT" = "true" ]; then
+              if [ "$SIZE" -gt "$LIMIT" ]; then
+                echo "  ফাইল 100 MiB এর বেশি -> Git LFS"
+                git lfs track "$OUT" >/dev/null
+                git add .gitattributes
+              fi
+              git add -f "$OUT"
+              git commit -m "Phone video ${PROFILE} Surah ${PAD} (${QARI_DIR})" || echo "No changes"
+              since_push=$((since_push+1))
+              # ৫টি সূরা পরপর push (একবারে অনেক বড় push এড়াতে)
+              if [ "$since_push" -ge 5 ]; then
+                push_retry || echo "::warning::Push failed - Release/Artifact থেকে ফাইল নিন"
+                since_push=0
+              fi
+            fi
+          done 3< surah_list.txt
+
+          if [ "$COMMIT_RESULT" = "true" ] && [ "$since_push" -gt 0 ]; then
+            push_retry || echo "::warning::Push failed - Release/Artifact থেকে ফাইল নিন"
+          fi
+
+          echo "সম্পন্ন: তৈরি $made | বাদ $skipped"
+          if [ "$made" -eq 0 ]; then
+            echo "Error: কোনো সূরাই তৈরি হয়নি (Release বা ${VIDEO_ROOT}/${QARI_DIR}/ এ ভিডিও আছে কিনা দেখুন)"
+            exit 1
+          fi
+          ls -lh "$STAGE"/ | head -n 130
+
+
+      - name: Upload Artifact (শুধু এই রানে তৈরি ভিডিওগুলো)
+        if: ${{ inputs.upload_artifact }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: rizwanPhoneVideo-${{ matrix.source }}-${{ env.QARI_DIR }}-${{ env.PROFILE }}
+          path: phone_stage/
+          retention-days: 3
